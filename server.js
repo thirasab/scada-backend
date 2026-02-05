@@ -20,7 +20,12 @@ const {
 } = process.env;
 
 if (!DATABASE_URL) throw new Error('Missing DATABASE_URL');
-if (!MQTT_HOST) throw new Error('Missing MQTT_HOST');
+if (MQTT_HOST) {
+  connectMqtt(); // ฟังก์ชันเดิมของคุณ
+} else {
+  console.warn('⚠️ MQTT disabled (no MQTT_HOST)');
+}
+
 if (!MQTT_USERNAME || !MQTT_PASSWORD) throw new Error('Missing MQTT_USERNAME/MQTT_PASSWORD');
 if (!MQTT_TELE_TOPIC) throw new Error('Missing MQTT_TELE_TOPIC');
 
