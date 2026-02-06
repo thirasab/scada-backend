@@ -1,5 +1,10 @@
+// server.js (รวมโค้ดครบ: MQTT -> Neon Postgres -> API + Serve public/index.html)
+
 import 'dotenv/config';
 import Fastify from 'fastify';
+import fastifyStatic from '@fastify/static';
+import path from 'path';
+import { fileURLToPath } from 'url';
 import mqtt from 'mqtt';
 import pg from 'pg';
 
@@ -9,7 +14,7 @@ import pg from 'pg';
 const DATABASE_URL = process.env.DATABASE_URL;
 if (!DATABASE_URL) throw new Error('Missing DATABASE_URL');
 
-// Render จะตั้ง PORT ให้เอง (อย่าตั้ง PORT ใน Render)
+// Render จะตั้ง PORT ให้เอง
 const HTTP_PORT = Number(process.env.PORT || 3000);
 
 const DEVICE_ID_DEFAULT = process.env.DEVICE_ID_DEFAULT || 'default';
@@ -28,12 +33,10 @@ const MQTT_TELE_TOPIC = process.env.MQTT_TELE_TOPIC;
 const MQTT_STAT_TOPIC = process.env.MQTT_STAT_TOPIC; // optional
 
 /* =========================
-   DB (Neon Postgres / TimescaleDB)
+   DB (Neon Postgres)
    ========================= */
 const { Pool } = pg;
 
-// ปล่อยให้ pg อ่าน sslmode จาก DATABASE_URL เป็นหลัก
-// แต่บางสภาพแวดล้อมต้องส่ง ssl object เพื่อให้ต่อได้
 const pool = new Pool({
   connectionString: DATABASE_URL,
   ssl: { rejectUnauthorized: false },
@@ -45,14 +48,24 @@ const pool = new Pool({
    ========================= */
 const fastify = Fastify({ logger: true });
 
+// ทำให้หา path ได้แน่นอนสำหรับ ESM
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
+
+// ✅ Serve static files จากโฟลเดอร์ public/
+fastify.register(fastifyStatic, {
+  root: path.join(__dirname, 'public'),
+  prefix: '/', // /index.html, /assets/... ฯลฯ
+});
+
 function nowIso() {
   return new Date().toISOString();
 }
 
-// ดึง device_id จาก topic แบบง่าย ๆ (ปรับได้)
+// เดา device_id จาก topic แบบง่าย ๆ
 function guessDeviceIdFromTopic(topic) {
   const parts = String(topic || '').split('/').filter(Boolean);
-  if (parts.length >= 2) return parts[parts.length - 2]; // เช่น cp/test/dht22-01/telemetry => dht22-01
+  if (parts.length >= 2) return parts[parts.length - 2]; // cp/test/dht22-01/telemetry => dht22-01
   return DEVICE_ID_DEFAULT;
 }
 
@@ -73,8 +86,9 @@ function parseTelemetry(payloadText) {
       if (Number.isFinite(n)) ts = new Date(n < 1e12 ? n * 1000 : n);
     }
 
-    // device_id ถ้ามาใน payload ให้ใช้เลย ไม่งั้นเดาจาก topic
-    const device_id = (j.device_id && String(j.device_id).trim()) ? String(j.device_id).trim() : null;
+    // device_id ถ้ามาใน payload ใช้เลย ไม่งั้นเดาจาก topic
+    const device_id =
+      (j.device_id && String(j.device_id).trim()) ? String(j.device_id).trim() : null;
 
     return { ok: true, ts, temp_c, hum_pct, device_id, raw: j };
   } catch {
@@ -160,7 +174,7 @@ function startMqttIfConfigured() {
     reconnectPeriod: 2000,
     connectTimeout: 10000,
     keepalive: 30,
-    rejectUnauthorized: true
+    rejectUnauthorized: true,
   });
 
   lastStatus.mqtt = 'connecting';
@@ -227,9 +241,16 @@ function startMqttIfConfigured() {
 }
 
 /* =========================
-   HTTP API
+   HTTP Routes
    ========================= */
-fastify.get('/', async () => ({ ok: true, service: 'scada-backend', time: nowIso() }));
+
+// ✅ หน้า Dashboard (public/index.html)
+fastify.get('/', async (req, reply) => {
+  return reply.sendFile('index.html');
+});
+
+// (ถ้าอยากดู JSON เดิม ย้ายไป /info)
+fastify.get('/info', async () => ({ ok: true, service: 'scada-backend', time: nowIso() }));
 
 fastify.get('/health', async () => {
   const r = await pool.query('SELECT 1 as ok');
