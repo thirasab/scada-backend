@@ -159,6 +159,58 @@
     .ok{ background: var(--ok); box-shadow: 0 0 14px rgba(45,255,178,.32); }
     .warn{ background: var(--warn); box-shadow: 0 0 14px rgba(255,176,32,.26); }
     .bad{ background: var(--bad); box-shadow: 0 0 14px rgba(255,59,92,.26); }
+
+/* ===== Responsive Industrial SCADA ===== */
+.wrap { padding: 0; }
+
+/* ใช้ Grid แทน Flex ให้คุมคอลัมน์ง่าย + ไม่ล้น */
+.row{
+  display: grid !important;
+  grid-template-columns: repeat(12, 1fr);
+  gap: 12px;
+  width: 100%;
+}
+
+/* การ์ดแต่ละใบกินคอลัมน์ */
+.row > .card:nth-child(1){ grid-column: span 4; }  /* device_id */
+.row > .card:nth-child(2){ grid-column: span 5; }  /* controls */
+.row > .card:nth-child(3){ grid-column: span 3; }  /* latest KPI */
+
+@media (max-width: 1100px){
+  .row > .card:nth-child(1){ grid-column: span 6; }
+  .row > .card:nth-child(2){ grid-column: span 6; }
+  .row > .card:nth-child(3){ grid-column: span 12; }
+}
+
+@media (max-width: 720px){
+  .row > .card:nth-child(1),
+  .row > .card:nth-child(2),
+  .row > .card:nth-child(3){
+    grid-column: span 12;
+  }
+
+  body{ padding: 12px; }
+  h1{ font-size: 18px; }
+  .kpi{ font-size: 26px; }
+}
+
+/* จอใหญ่ (ทีวีโรงงาน/จอคอนโทรล) */
+@media (min-width: 1600px){
+  .wrap{ max-width: 1400px; }
+  h1{ font-size: 24px; }
+  label{ font-size: 13px; }
+  .kpi{ font-size: 38px; }
+  canvas{ height: 520px !important; }
+}
+
+/* มือถือเล็กมาก */
+@media (max-width: 420px){
+  .kpi{ font-size: 22px; }
+  button{ width: 100%; }
+  .grid2{ grid-template-columns: 1fr; }
+  canvas{ height: 360px !important; }
+}
+
   </style>
 </head>
 
