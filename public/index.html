@@ -9,29 +9,22 @@
 
   <style>
     /* =========================
-       ✅ FIX OVERFLOW (สำคัญมาก)
+       ✅ FIX OVERFLOW (กันล้นขอบ)
        ========================= */
     * { box-sizing: border-box; }
     html, body { width: 100%; }
     body { margin: 0; padding: 16px; overflow-x: hidden; }
 
     .wrap { max-width: 1100px; width: 100%; margin: 0 auto; overflow-x: hidden; }
-
-    .row { display: flex; gap: 12px; flex-wrap: wrap; width: 100%; }
-    /* ✅ min-width:0 = กัน flex item ดันล้นขอบ */
-    .card { min-width: 0 !important; }
-
     .chartCard { width: 100%; overflow: hidden; }
     canvas { width: 100% !important; max-width: 100% !important; height: 420px !important; }
-
     input, select { max-width: 100%; }
 
     /* =========================
-       Layout base
+       Base layout
        ========================= */
     body { font-family: system-ui, -apple-system, Segoe UI, Roboto, Arial, sans-serif; }
-    .title { display:flex; align-items:baseline; justify-content:space-between; gap: 10px; }
-
+    .title { display:flex; align-items:baseline; justify-content:space-between; gap: 10px; flex-wrap: wrap; }
     h1 { margin: 0 0 10px 0; font-size: 20px; letter-spacing: .6px; }
     .muted { font-size: 12px; }
     label { font-size: 12px; display:block; margin-bottom:6px; }
@@ -39,9 +32,9 @@
     .card {
       border-radius: 12px;
       padding: 12px 14px;
-      flex: 1 1 260px;
       background: rgba(127,127,127,.06);
       border: 1px solid rgba(127,127,127,.25);
+      min-width: 0 !important; /* ⭐ สำคัญสุด กัน flex/grid item ดันล้น */
     }
 
     input, select {
@@ -104,14 +97,14 @@
 
     [data-theme="dark"]{
       color-scheme: dark;
-      --bg: #04060a;                   /* almost black */
-      --panel: rgba(10,14,22,.92);     /* deep navy */
+      --bg: #04060a;
+      --panel: rgba(10,14,22,.92);
       --panel2: rgba(10,14,22,.70);
-      --stroke: rgba(45,255,178,.22);  /* neon border */
-      --text: #d9ffe9;                 /* pale green */
+      --stroke: rgba(45,255,178,.22);
+      --text: #d9ffe9;
       --muted2: rgba(217,255,233,.72);
 
-      --accent: #2dffb2;               /* neon mint */
+      --accent: #2dffb2;
       --ok: #2dffb2;
       --warn: #ffb020;
       --bad: #ff3b5c;
@@ -159,6 +152,62 @@
     .ok{ background: var(--ok); box-shadow: 0 0 14px rgba(45,255,178,.32); }
     .warn{ background: var(--warn); box-shadow: 0 0 14px rgba(255,176,32,.26); }
     .bad{ background: var(--bad); box-shadow: 0 0 14px rgba(255,59,92,.26); }
+
+    /* =========================
+       ✅ RESPONSIVE GRID (แทน flex)
+       ========================= */
+    .row{
+      display: grid;
+      grid-template-columns: repeat(12, 1fr);
+      gap: 12px;
+      width: 100%;
+    }
+    .row > .card:nth-child(1){ grid-column: span 4; }  /* device_id */
+    .row > .card:nth-child(2){ grid-column: span 5; }  /* controls */
+    .row > .card:nth-child(3){ grid-column: span 3; }  /* latest */
+
+    @media (max-width: 1100px){
+      .row > .card:nth-child(1){ grid-column: span 6; }
+      .row > .card:nth-child(2){ grid-column: span 6; }
+      .row > .card:nth-child(3){ grid-column: span 12; }
+    }
+
+    @media (max-width: 720px){
+      body{ padding: 12px; }
+      h1{ font-size: 18px; }
+      .kpi{ font-size: 26px; }
+      .row > .card:nth-child(1),
+      .row > .card:nth-child(2),
+      .row > .card:nth-child(3){ grid-column: span 12; }
+      canvas{ height: 360px !important; }
+      button{ width: 100%; }
+    }
+
+    @media (min-width: 1600px){
+      .wrap{ max-width: 1400px; }
+      h1{ font-size: 24px; }
+      label{ font-size: 13px; }
+      .kpi{ font-size: 38px; }
+      canvas{ height: 520px !important; }
+    }
+
+    /* small helper for radio row */
+    .radioRow{
+      display:flex;
+      gap: 14px;
+      flex-wrap: wrap;
+      align-items: center;
+      margin-bottom: 10px;
+    }
+    .radioRow label{
+      margin: 0;
+      display:flex;
+      gap: 8px;
+      align-items: center;
+      cursor: pointer;
+      user-select: none;
+    }
+    .radioRow input{ width: auto; }
   </style>
 </head>
 
@@ -178,25 +227,45 @@
     </div>
 
     <div class="row">
+      <!-- Card 1 -->
       <div class="card">
         <label>device_id</label>
         <input id="deviceId" value="dht22-01" placeholder="เช่น dht22-01" />
         <div class="muted" style="margin-top:8px">
-          เรียก: <span class="mono">/api/history?device_id=…&minutes=…</span>
+          เรียก: <span class="mono">/api/history หรือ /api/history_range</span>
         </div>
       </div>
 
+      <!-- Card 2 -->
       <div class="card">
-        <div class="grid2">
-          <div>
-            <label>ย้อนหลัง (minutes)</label>
-            <input id="minutes" type="number" value="180" min="1" step="1" />
-          </div>
-          <div>
-            <label>รีเฟรชทุก (วินาที)</label>
-            <input id="refreshSec" type="number" value="10" min="2" step="1" />
+        <label>โหมดการดูข้อมูล</label>
+
+        <div class="radioRow">
+          <label><input type="radio" name="timeMode" value="relative" checked> ย้อนหลัง</label>
+          <label><input type="radio" name="timeMode" value="range"> ช่วงเวลา</label>
+        </div>
+
+        <!-- โหมดย้อนหลัง -->
+        <div id="modeRelative">
+          <label>ย้อนหลัง (minutes)</label>
+          <input id="minutes" type="number" value="180" min="1" step="1" />
+        </div>
+
+        <!-- โหมดช่วงเวลา -->
+        <div id="modeRange" style="display:none;">
+          <label>จากเวลา</label>
+          <input id="fromTime" type="datetime-local" />
+          <label style="margin-top:8px;">ถึงเวลา</label>
+          <input id="toTime" type="datetime-local" />
+          <div class="muted" style="margin-top:6px;">
+            ใช้ API: <span class="mono">/api/history_range?device_id=...&from=...&to=...</span>
           </div>
         </div>
+
+        <div style="height:10px"></div>
+
+        <label>รีเฟรชทุก (วินาที)</label>
+        <input id="refreshSec" type="number" value="10" min="2" step="1" />
 
         <div style="display:flex; gap:10px; margin-top:12px; align-items:center; flex-wrap:wrap;">
           <button id="btnLoad">โหลด/รีเฟรช</button>
@@ -205,6 +274,7 @@
         </div>
       </div>
 
+      <!-- Card 3 -->
       <div class="card">
         <div class="muted">ค่าล่าสุด</div>
         <div class="kpi" id="latestTemp">— <small>°C</small></div>
@@ -223,7 +293,6 @@
 
   <script>
     const $ = (id) => document.getElementById(id);
-
     let timer = null;
     let chart = null;
 
@@ -232,14 +301,70 @@
       return new Date(iso).toLocaleString();
     }
 
+    // ===== Theme toggle =====
+    const themeBtn = document.getElementById("themeBtn");
+    function applyTheme(theme) {
+      document.documentElement.setAttribute("data-theme", theme);
+      themeBtn.textContent = theme === "dark" ? "☀️ Light" : "🌙 Dark";
+      localStorage.setItem("theme", theme);
+      setChartTheme();
+    }
+    const savedTheme = localStorage.getItem("theme") || "dark";
+    applyTheme(savedTheme);
+
+    themeBtn.addEventListener("click", () => {
+      const cur = document.documentElement.getAttribute("data-theme");
+      applyTheme(cur === "dark" ? "light" : "dark");
+    });
+
+    // ===== Time mode toggle =====
+    function getTimeMode() {
+      return document.querySelector('input[name="timeMode"]:checked')?.value || "relative";
+    }
+    function setModeUI() {
+      const mode = getTimeMode();
+      $("modeRelative").style.display = mode === "relative" ? "block" : "none";
+      $("modeRange").style.display = mode === "range" ? "block" : "none";
+    }
+    document.querySelectorAll('input[name="timeMode"]').forEach(r => {
+      r.addEventListener("change", () => {
+        setModeUI();
+        // ถ้าเปลี่ยนโหมด ให้โหลดทันที
+        refreshOnce();
+      });
+    });
+    setModeUI();
+
+    // set default from-to = ล่าสุด 3 ชั่วโมง (ตามเวลาท้องถิ่น)
+    function pad2(n){ return String(n).padStart(2, "0"); }
+    function toLocalInputValue(d){
+      const yyyy = d.getFullYear();
+      const mm = pad2(d.getMonth()+1);
+      const dd = pad2(d.getDate());
+      const hh = pad2(d.getHours());
+      const mi = pad2(d.getMinutes());
+      return `${yyyy}-${mm}-${dd}T${hh}:${mi}`;
+    }
+    (function initRangeDefault(){
+      const now = new Date();
+      const from = new Date(now.getTime() - 3*60*60*1000);
+      const fromEl = $("fromTime");
+      const toEl = $("toTime");
+      if (fromEl && toEl) {
+        fromEl.value = toLocalInputValue(from);
+        toEl.value = toLocalInputValue(now);
+      }
+    })();
+
+    // ===== Health / Latest =====
     async function checkHealth() {
-      const url = "/health"; // ✅ ตรงกับ server.js
+      const url = "/health";
       try {
         const res = await fetch(url, { cache: "no-store" });
         const ok = res.ok;
         $("healthDot").className = "statusDot " + (ok ? "ok" : "bad");
         $("healthText").textContent = ok ? "backend ok" : ("backend error (" + res.status + ")");
-      } catch (e) {
+      } catch {
         $("healthDot").className = "statusDot bad";
         $("healthText").textContent = "backend offline";
       }
@@ -255,27 +380,47 @@
         $("latestTemp").innerHTML = `${Number(x.temp_c ?? NaN).toFixed(2)} <small>°C</small>`;
         $("latestHum").innerHTML  = `${Number(x.hum_pct ?? NaN).toFixed(2)} <small>%</small>`;
         $("latestTs").textContent = `เวลา: ${fmtLocal(x.ts)} | topic: ${x.topic ?? "-"}`;
-      } catch (e) {
+      } catch {
         $("latestTs").textContent = "โหลด latest ไม่ได้";
       }
     }
 
-    async function loadHistory(deviceId, minutes) {
-      const url = `/api/history?device_id=${encodeURIComponent(deviceId)}&minutes=${encodeURIComponent(minutes)}`;
+    // ===== History loader (2 modes) =====
+    async function loadHistory(deviceId) {
+      const mode = getTimeMode();
+      let url = "";
+
+      if (mode === "relative") {
+        const minutes = Number($("minutes").value || 60);
+        url = `/api/history?device_id=${encodeURIComponent(deviceId)}&minutes=${encodeURIComponent(minutes)}`;
+      } else {
+        const from = $("fromTime").value;
+        const to = $("toTime").value;
+        if (!from || !to) throw new Error("กรุณาเลือกช่วงเวลา From/To");
+
+        // NOTE: ต้องมี API นี้ใน server.js
+        url = `/api/history_range?device_id=${encodeURIComponent(deviceId)}&from=${encodeURIComponent(from)}&to=${encodeURIComponent(to)}`;
+      }
+
       const res = await fetch(url, { cache: "no-store" });
-      if (!res.ok) throw new Error("history status " + res.status);
+      if (!res.ok) throw new Error(`history status ${res.status}`);
       const arr = await res.json();
       if (!Array.isArray(arr)) throw new Error("history not array");
 
       arr.sort((a,b) => new Date(a.ts) - new Date(b.ts));
 
-      const labels = arr.map(r => new Date(r.ts));
-      const temp = arr.map(r => Number(r.temp_c));
-      const hum  = arr.map(r => Number(r.hum_pct));
-
-      return { labels, temp, hum, count: arr.length, firstTs: arr[0]?.ts, lastTs: arr[arr.length - 1]?.ts, url };
+      return {
+        labels: arr.map(r => new Date(r.ts)),
+        temp: arr.map(r => Number(r.temp_c)),
+        hum:  arr.map(r => Number(r.hum_pct)),
+        count: arr.length,
+        firstTs: arr[0]?.ts,
+        lastTs: arr[arr.length - 1]?.ts,
+        url
+      };
     }
 
+    // ===== Chart theme =====
     function setChartTheme() {
       if (!chart) return;
 
@@ -298,8 +443,8 @@
 
       chart.options.plugins.legend.labels.color = tick;
 
-      chart.data.datasets[0].borderColor = dark ? "#2dffb2" : "#2563eb"; // temp
-      chart.data.datasets[1].borderColor = dark ? "#ffb020" : "#f59e0b"; // hum
+      chart.data.datasets[0].borderColor = dark ? "#2dffb2" : "#2563eb";
+      chart.data.datasets[1].borderColor = dark ? "#ffb020" : "#f59e0b";
 
       chart.update();
     }
@@ -349,48 +494,21 @@
 
       setChartTheme();
     }
-  </script>
 
-  <!-- Chart.js time scale adapter -->
-  <script src="https://cdn.jsdelivr.net/npm/date-fns@3.6.0"></script>
-  <script src="https://cdn.jsdelivr.net/npm/chartjs-adapter-date-fns@3.0.0"></script>
-
-  <script>
-    // ===== Theme toggle =====
-    const themeBtn = document.getElementById("themeBtn");
-
-    function applyTheme(theme) {
-      document.documentElement.setAttribute("data-theme", theme);
-      themeBtn.textContent = theme === "dark" ? "☀️ Light" : "🌙 Dark";
-      localStorage.setItem("theme", theme);
-      setChartTheme();
-    }
-
-    // default เป็น dark แบบ SCADA
-    const savedTheme = localStorage.getItem("theme") || "dark";
-    applyTheme(savedTheme);
-
-    themeBtn.addEventListener("click", () => {
-      const cur = document.documentElement.getAttribute("data-theme");
-      applyTheme(cur === "dark" ? "light" : "dark");
-    });
-
-    // ===== Data refresh =====
+    // ===== Refresh loop =====
     async function refreshOnce() {
       const deviceId = $("deviceId").value.trim();
-      const minutes  = Number($("minutes").value || 60);
       if (!deviceId) return;
 
       try {
         await checkHealth();
         await loadLatest(deviceId);
 
-        const h = await loadHistory(deviceId, minutes);
+        const h = await loadHistory(deviceId);
         ensureChart(h.labels, h.temp, h.hum);
 
         $("lastUpdate").textContent = "อัปเดต: " + new Date().toLocaleTimeString();
-        $("note").textContent =
-          `จุดข้อมูล: ${h.count} | ช่วงเวลา: ${fmtLocal(h.firstTs)} → ${fmtLocal(h.lastTs)} | ${h.url}`;
+        $("note").textContent = `จุดข้อมูล: ${h.count} | ช่วงเวลา: ${fmtLocal(h.firstTs)} → ${fmtLocal(h.lastTs)} | ${h.url}`;
       } catch (e) {
         $("note").textContent = "โหลดกราฟไม่สำเร็จ: " + (e?.message || e);
       }
@@ -414,5 +532,9 @@
 
     refreshOnce().then(startAuto);
   </script>
+
+  <!-- Chart.js time scale adapter -->
+  <script src="https://cdn.jsdelivr.net/npm/date-fns@3.6.0"></script>
+  <script src="https://cdn.jsdelivr.net/npm/chartjs-adapter-date-fns@3.0.0"></script>
 </body>
 </html>

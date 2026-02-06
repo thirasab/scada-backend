@@ -234,6 +234,24 @@ fastify.get('/api/history', async (req) => {
   return r.rows;
 });
 
+fastify.get('/api/history_range', async (req) => {
+  const device_id = req.query?.device_id;
+  const from = req.query?.from;
+  const to   = req.query?.to;
+
+  if (!device_id || !from || !to) return [];
+
+  const q = `
+    SELECT ts, temp_c, hum_pct
+    FROM telemetry_raw
+    WHERE device_id = $1
+      AND ts BETWEEN $2 AND $3
+    ORDER BY ts ASC
+  `;
+  const r = await pool.query(q, [device_id, from, to]);
+  return r.rows;
+});
+
 async function start() {
   await pool.query('SELECT now()');
   fastify.log.info('DB connected OK');
