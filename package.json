@@ -2,18 +2,14 @@
   "name": "scada-backend",
   "version": "1.0.0",
   "private": true,
-  "description": "SCADA backend: MQTT -> Neon Postgres with Fastify",
   "main": "server.cjs",
   "scripts": {
     "start": "node server.cjs"
   },
-  "engines": {
-    "node": ">=18"
-  },
   "dependencies": {
+    "@fastify/cors": "^8.5.0",
     "dotenv": "^16.4.5",
     "fastify": "^4.28.1",
-    "@fastify/cors": "^8.5.0",
     "mqtt": "^5.10.4",
     "pg": "^8.12.0"
   }
