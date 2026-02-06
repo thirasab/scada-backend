@@ -1,264 +1,418 @@
-import 'dotenv/config';
-import Fastify from 'fastify';
-import fastifyStatic from '@fastify/static';
-import path from 'path';
-import { fileURLToPath } from 'url';
-import mqtt from 'mqtt';
-import pg from 'pg';
+<!doctype html>
+<html lang="th">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>SCADA Dashboard</title>
 
-const DATABASE_URL = process.env.DATABASE_URL;
-if (!DATABASE_URL) throw new Error('Missing DATABASE_URL');
+  <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
 
-const HTTP_PORT = Number(process.env.PORT || 3000);
-const DEVICE_ID_DEFAULT = process.env.DEVICE_ID_DEFAULT || 'default';
+  <style>
+    /* =========================
+       ✅ FIX OVERFLOW (สำคัญมาก)
+       ========================= */
+    * { box-sizing: border-box; }
+    html, body { width: 100%; }
+    body { margin: 0; padding: 16px; overflow-x: hidden; }
 
-const RETENTION_DAYS = Number(process.env.RETENTION_DAYS || 30);
-const CLEANUP_EVERY_MINUTES = Number(process.env.CLEANUP_EVERY_MINUTES || 360);
+    .wrap { max-width: 1100px; width: 100%; margin: 0 auto; overflow-x: hidden; }
 
-const MQTT_ENABLED = process.env.MQTT_ENABLED !== 'false';
-const MQTT_HOST = process.env.MQTT_HOST;
-const MQTT_PORT = Number(process.env.MQTT_PORT || 8883);
-const MQTT_USERNAME = process.env.MQTT_USERNAME;
-const MQTT_PASSWORD = process.env.MQTT_PASSWORD;
-const MQTT_TELE_TOPIC = process.env.MQTT_TELE_TOPIC;
-const MQTT_STAT_TOPIC = process.env.MQTT_STAT_TOPIC;
+    .row { display: flex; gap: 12px; flex-wrap: wrap; width: 100%; }
+    /* ✅ min-width:0 = กัน flex item ดันล้นขอบ */
+    .card { min-width: 0 !important; }
 
-const { Pool } = pg;
-const pool = new Pool({
-  connectionString: DATABASE_URL,
-  ssl: { rejectUnauthorized: false },
-  max: 5,
-});
+    .chartCard { width: 100%; overflow: hidden; }
+    canvas { width: 100% !important; max-width: 100% !important; height: 420px !important; }
 
-const fastify = Fastify({ logger: true });
+    input, select { max-width: 100%; }
 
-const __filename = fileURLToPath(import.meta.url);
-const __dirname = path.dirname(__filename);
+    /* =========================
+       Layout base
+       ========================= */
+    body { font-family: system-ui, -apple-system, Segoe UI, Roboto, Arial, sans-serif; }
+    .title { display:flex; align-items:baseline; justify-content:space-between; gap: 10px; }
 
-fastify.register(fastifyStatic, {
-  root: path.join(__dirname, 'public'),
-  prefix: '/',
-});
+    h1 { margin: 0 0 10px 0; font-size: 20px; letter-spacing: .6px; }
+    .muted { font-size: 12px; }
+    label { font-size: 12px; display:block; margin-bottom:6px; }
 
-function nowIso() { return new Date().toISOString(); }
-
-function guessDeviceIdFromTopic(topic) {
-  const parts = String(topic || '').split('/').filter(Boolean);
-  if (parts.length >= 2) return parts[parts.length - 2];
-  return DEVICE_ID_DEFAULT;
-}
-
-function parseTelemetry(payloadText) {
-  try {
-    const j = JSON.parse(payloadText);
-
-    const tempRaw = j.temp_c ?? j.temp ?? null;
-    const humRaw = j.hum_pct ?? j.hum ?? null;
-
-    const temp_c = Number.isFinite(Number(tempRaw)) ? Number(tempRaw) : null;
-    const hum_pct = Number.isFinite(Number(humRaw)) ? Number(humRaw) : null;
-
-    let ts = new Date();
-    if (j.ts != null) {
-      const n = Number(j.ts);
-      if (Number.isFinite(n)) ts = new Date(n < 1e12 ? n * 1000 : n);
+    .card {
+      border-radius: 12px;
+      padding: 12px 14px;
+      flex: 1 1 260px;
+      background: rgba(127,127,127,.06);
+      border: 1px solid rgba(127,127,127,.25);
     }
 
-    const device_id = (j.device_id && String(j.device_id).trim()) ? String(j.device_id).trim() : null;
+    input, select {
+      width: 100%;
+      padding: 10px 10px;
+      border-radius: 10px;
+      border: 1px solid rgba(127,127,127,.35);
+      background: transparent;
+      color: inherit;
+      outline: none;
+    }
 
-    return { ok: true, ts, temp_c, hum_pct, device_id, raw: j };
-  } catch {
-    return { ok: false };
-  }
-}
+    button {
+      padding: 10px 12px;
+      border-radius: 10px;
+      border: 1px solid rgba(127,127,127,.35);
+      background: rgba(127,127,127,.12);
+      color: inherit;
+      cursor: pointer;
+      white-space: nowrap;
+    }
+    button:hover { filter: brightness(1.08); }
 
-async function insertTelemetry({ ts, device_id, temp_c, hum_pct, topic, raw_json }) {
-  const q = `
-    INSERT INTO telemetry_raw (ts, device_id, temp_c, hum_pct, topic, raw_json)
-    VALUES ($1, $2, $3, $4, $5, $6)
-  `;
-  await pool.query(q, [ts, device_id, temp_c, hum_pct, topic, raw_json]);
-}
+    .kpi { font-size: 28px; font-weight: 800; line-height: 1.1; margin-top: 6px; }
+    .kpi small { font-size: 14px; font-weight: 700; opacity:.85; }
 
-async function cleanupOldData() {
-  const days = Math.max(1, Math.min(3650, Number.isFinite(RETENTION_DAYS) ? RETENTION_DAYS : 30));
-  const q = `
-    DELETE FROM telemetry_raw
-    WHERE ts < now() - ($1::text || ' days')::interval
-  `;
-  const r = await pool.query(q, [String(days)]);
-  fastify.log.info({ deleted: r.rowCount, retention_days: days }, 'Cleanup old telemetry done');
-}
+    .grid2 { display:grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+    @media (max-width: 720px) { .grid2 { grid-template-columns: 1fr; } }
 
-function scheduleCleanup() {
-  const everyMin = Math.max(5, Math.min(24 * 60, Number.isFinite(CLEANUP_EVERY_MINUTES) ? CLEANUP_EVERY_MINUTES : 360));
+    .chartCard {
+      padding: 12px 14px;
+      border-radius: 12px;
+      border: 1px solid rgba(127,127,127,.25);
+      background: rgba(127,127,127,.04);
+    }
 
-  cleanupOldData().catch((e) => fastify.log.error(e, 'Cleanup failed'));
-  setInterval(() => cleanupOldData().catch((e) => fastify.log.error(e, 'Cleanup failed')), everyMin * 60 * 1000);
+    .statusDot { display:inline-block; width:10px; height:10px; border-radius:50%; margin-right:6px; background:#999; vertical-align:middle; }
+    .mono { font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace; }
 
-  fastify.log.info({ every_minutes: everyMin, retention_days: Number.isFinite(RETENTION_DAYS) ? RETENTION_DAYS : 30 }, 'Cleanup scheduler started');
-}
+    /* =========================
+       ✅ Industrial SCADA THEME
+       ========================= */
+    :root{
+      color-scheme: light;
+      --bg: #f6f7fb;
+      --panel: rgba(255,255,255,.80);
+      --panel2: rgba(255,255,255,.60);
+      --stroke: rgba(17,24,39,.18);
+      --text: #0b1220;
+      --muted2: rgba(11,18,32,.72);
 
-let mqttClient = null;
-const lastStatus = { mqtt: 'disabled', lastMessageAt: null, lastError: null, inserted: 0 };
+      --accent: #2563eb;
+      --ok: #16a34a;
+      --warn: #f59e0b;
+      --bad: #dc2626;
 
-function startMqttIfConfigured() {
-  if (!MQTT_ENABLED) {
-    lastStatus.mqtt = 'disabled';
-    fastify.log.warn('MQTT disabled by MQTT_ENABLED=false');
-    return;
-  }
+      --shadow: 0 8px 28px rgba(0,0,0,.08);
+      --glow: none;
+    }
 
-  const missing = [];
-  if (!MQTT_HOST) missing.push('MQTT_HOST');
-  if (!MQTT_USERNAME) missing.push('MQTT_USERNAME');
-  if (!MQTT_PASSWORD) missing.push('MQTT_PASSWORD');
-  if (!MQTT_TELE_TOPIC) missing.push('MQTT_TELE_TOPIC');
+    [data-theme="dark"]{
+      color-scheme: dark;
+      --bg: #04060a;                   /* almost black */
+      --panel: rgba(10,14,22,.92);     /* deep navy */
+      --panel2: rgba(10,14,22,.70);
+      --stroke: rgba(45,255,178,.22);  /* neon border */
+      --text: #d9ffe9;                 /* pale green */
+      --muted2: rgba(217,255,233,.72);
 
-  if (missing.length) {
-    lastStatus.mqtt = 'disabled';
-    fastify.log.warn({ missing }, 'MQTT disabled due to missing env');
-    return;
-  }
+      --accent: #2dffb2;               /* neon mint */
+      --ok: #2dffb2;
+      --warn: #ffb020;
+      --bad: #ff3b5c;
 
-  const mqttUrl = `mqtts://${MQTT_HOST}:${MQTT_PORT}`;
+      --shadow: 0 14px 40px rgba(0,0,0,.58);
+      --glow: 0 0 18px rgba(45,255,178,.18), 0 0 42px rgba(45,255,178,.10);
+    }
 
-  mqttClient = mqtt.connect(mqttUrl, {
-    username: MQTT_USERNAME,
-    password: MQTT_PASSWORD,
-    clean: true,
-    reconnectPeriod: 2000,
-    connectTimeout: 10000,
-    keepalive: 30,
-    rejectUnauthorized: true,
-  });
+    body{
+      background:
+        radial-gradient(1200px 700px at 20% 10%, rgba(45,255,178,.05), transparent 60%),
+        radial-gradient(900px 600px at 80% 20%, rgba(255,176,32,.04), transparent 55%),
+        var(--bg);
+      color: var(--text);
+    }
 
-  lastStatus.mqtt = 'connecting';
+    .muted{ color: var(--muted2); opacity: 1; }
+    .mono{ color: rgba(217,255,233,.86); }
 
-  mqttClient.on('connect', () => {
-    lastStatus.mqtt = 'connected';
-    lastStatus.lastError = null;
+    .card, .chartCard{
+      background: linear-gradient(180deg, var(--panel), var(--panel2));
+      border: 1px solid var(--stroke);
+      box-shadow: var(--shadow);
+      backdrop-filter: blur(8px);
+    }
 
-    fastify.log.info(`MQTT connected: ${mqttUrl}`);
-    mqttClient.subscribe(MQTT_TELE_TOPIC, { qos: 1 }, (err) => {
-      if (err) fastify.log.error(err, 'Subscribe telemetry failed');
-      else fastify.log.info(`Subscribed telemetry: ${MQTT_TELE_TOPIC}`);
+    [data-theme="dark"] h1{ text-shadow: var(--glow); }
+
+    input, select{
+      border: 1px solid var(--stroke);
+      background: rgba(0,0,0,.08);
+    }
+    [data-theme="dark"] input,
+    [data-theme="dark"] select{
+      background: rgba(0,0,0,.24);
+    }
+
+    [data-theme="dark"] button{
+      background: rgba(0,0,0,.30);
+      border: 1px solid var(--stroke);
+      box-shadow: var(--glow);
+    }
+
+    .statusDot{ background: rgba(255,255,255,.35); }
+    .ok{ background: var(--ok); box-shadow: 0 0 14px rgba(45,255,178,.32); }
+    .warn{ background: var(--warn); box-shadow: 0 0 14px rgba(255,176,32,.26); }
+    .bad{ background: var(--bad); box-shadow: 0 0 14px rgba(255,59,92,.26); }
+  </style>
+</head>
+
+<body>
+  <div class="wrap">
+    <div class="title">
+      <h1>SCADA Dashboard</h1>
+
+      <div style="display:flex; gap:10px; align-items:center;">
+        <button id="themeBtn">🌙 Dark</button>
+
+        <div class="muted">
+          <span id="healthDot" class="statusDot"></span>
+          <span id="healthText">checking…</span>
+        </div>
+      </div>
+    </div>
+
+    <div class="row">
+      <div class="card">
+        <label>device_id</label>
+        <input id="deviceId" value="dht22-01" placeholder="เช่น dht22-01" />
+        <div class="muted" style="margin-top:8px">
+          เรียก: <span class="mono">/api/history?device_id=…&minutes=…</span>
+        </div>
+      </div>
+
+      <div class="card">
+        <div class="grid2">
+          <div>
+            <label>ย้อนหลัง (minutes)</label>
+            <input id="minutes" type="number" value="180" min="1" step="1" />
+          </div>
+          <div>
+            <label>รีเฟรชทุก (วินาที)</label>
+            <input id="refreshSec" type="number" value="10" min="2" step="1" />
+          </div>
+        </div>
+
+        <div style="display:flex; gap:10px; margin-top:12px; align-items:center; flex-wrap:wrap;">
+          <button id="btnLoad">โหลด/รีเฟรช</button>
+          <button id="btnToggle">หยุด auto</button>
+          <div class="muted" id="lastUpdate">—</div>
+        </div>
+      </div>
+
+      <div class="card">
+        <div class="muted">ค่าล่าสุด</div>
+        <div class="kpi" id="latestTemp">— <small>°C</small></div>
+        <div class="kpi" id="latestHum">— <small>%</small></div>
+        <div class="muted" id="latestTs">—</div>
+      </div>
+    </div>
+
+    <div style="height:12px"></div>
+
+    <div class="chartCard">
+      <canvas id="chart"></canvas>
+      <div class="muted" id="note" style="margin-top:10px">—</div>
+    </div>
+  </div>
+
+  <script>
+    const $ = (id) => document.getElementById(id);
+
+    let timer = null;
+    let chart = null;
+
+    function fmtLocal(iso) {
+      if (!iso) return "—";
+      return new Date(iso).toLocaleString();
+    }
+
+    async function checkHealth() {
+      const url = "/health"; // ✅ ตรงกับ server.js
+      try {
+        const res = await fetch(url, { cache: "no-store" });
+        const ok = res.ok;
+        $("healthDot").className = "statusDot " + (ok ? "ok" : "bad");
+        $("healthText").textContent = ok ? "backend ok" : ("backend error (" + res.status + ")");
+      } catch (e) {
+        $("healthDot").className = "statusDot bad";
+        $("healthText").textContent = "backend offline";
+      }
+    }
+
+    async function loadLatest(deviceId) {
+      try {
+        const res = await fetch(`/api/latest?device_id=${encodeURIComponent(deviceId)}`, { cache: "no-store" });
+        if (!res.ok) throw new Error("latest status " + res.status);
+        const x = await res.json();
+        if (!x) return;
+
+        $("latestTemp").innerHTML = `${Number(x.temp_c ?? NaN).toFixed(2)} <small>°C</small>`;
+        $("latestHum").innerHTML  = `${Number(x.hum_pct ?? NaN).toFixed(2)} <small>%</small>`;
+        $("latestTs").textContent = `เวลา: ${fmtLocal(x.ts)} | topic: ${x.topic ?? "-"}`;
+      } catch (e) {
+        $("latestTs").textContent = "โหลด latest ไม่ได้";
+      }
+    }
+
+    async function loadHistory(deviceId, minutes) {
+      const url = `/api/history?device_id=${encodeURIComponent(deviceId)}&minutes=${encodeURIComponent(minutes)}`;
+      const res = await fetch(url, { cache: "no-store" });
+      if (!res.ok) throw new Error("history status " + res.status);
+      const arr = await res.json();
+      if (!Array.isArray(arr)) throw new Error("history not array");
+
+      arr.sort((a,b) => new Date(a.ts) - new Date(b.ts));
+
+      const labels = arr.map(r => new Date(r.ts));
+      const temp = arr.map(r => Number(r.temp_c));
+      const hum  = arr.map(r => Number(r.hum_pct));
+
+      return { labels, temp, hum, count: arr.length, firstTs: arr[0]?.ts, lastTs: arr[arr.length - 1]?.ts, url };
+    }
+
+    function setChartTheme() {
+      if (!chart) return;
+
+      const dark = document.documentElement.getAttribute("data-theme") === "dark";
+      const grid   = dark ? "rgba(45,255,178,.10)" : "rgba(17,24,39,.10)";
+      const tick   = dark ? "rgba(217,255,233,.86)" : "rgba(11,18,32,.75)";
+      const border = dark ? "rgba(45,255,178,.24)" : "rgba(17,24,39,.18)";
+
+      chart.options.scales.x.grid.color = grid;
+      chart.options.scales.yTemp.grid.color = grid;
+      chart.options.scales.yHum.grid.color = grid;
+
+      chart.options.scales.x.ticks.color = tick;
+      chart.options.scales.yTemp.ticks.color = tick;
+      chart.options.scales.yHum.ticks.color = tick;
+
+      chart.options.scales.x.border.color = border;
+      chart.options.scales.yTemp.border.color = border;
+      chart.options.scales.yHum.border.color = border;
+
+      chart.options.plugins.legend.labels.color = tick;
+
+      chart.data.datasets[0].borderColor = dark ? "#2dffb2" : "#2563eb"; // temp
+      chart.data.datasets[1].borderColor = dark ? "#ffb020" : "#f59e0b"; // hum
+
+      chart.update();
+    }
+
+    function ensureChart(labels, temp, hum) {
+      const ctx = $("chart").getContext("2d");
+
+      if (chart) {
+        chart.data.labels = labels;
+        chart.data.datasets[0].data = temp;
+        chart.data.datasets[1].data = hum;
+        setChartTheme();
+        return;
+      }
+
+      chart = new Chart(ctx, {
+        type: "line",
+        data: {
+          labels,
+          datasets: [
+            { label: "Temperature (°C)", data: temp, borderWidth: 2, pointRadius: 0, tension: 0.25, yAxisID: "yTemp", borderColor: "#2dffb2" },
+            { label: "Humidity (%)",     data: hum,  borderWidth: 2, pointRadius: 0, tension: 0.25, yAxisID: "yHum",  borderColor: "#ffb020" }
+          ]
+        },
+        options: {
+          responsive: true,
+          maintainAspectRatio: false,
+          interaction: { mode: "index", intersect: false },
+          plugins: {
+            legend: { position: "top" },
+            tooltip: {
+              callbacks: {
+                title: (items) => {
+                  const d = items?.[0]?.label;
+                  return d ? new Date(d).toLocaleString() : "";
+                }
+              }
+            }
+          },
+          scales: {
+            x: { type: "time", time: { unit: "minute" } },
+            yTemp: { type: "linear", position: "left", title: { display: true, text: "°C" } },
+            yHum:  { type: "linear", position: "right", title: { display: true, text: "%" }, grid: { drawOnChartArea: false } }
+          }
+        }
+      });
+
+      setChartTheme();
+    }
+  </script>
+
+  <!-- Chart.js time scale adapter -->
+  <script src="https://cdn.jsdelivr.net/npm/date-fns@3.6.0"></script>
+  <script src="https://cdn.jsdelivr.net/npm/chartjs-adapter-date-fns@3.0.0"></script>
+
+  <script>
+    // ===== Theme toggle =====
+    const themeBtn = document.getElementById("themeBtn");
+
+    function applyTheme(theme) {
+      document.documentElement.setAttribute("data-theme", theme);
+      themeBtn.textContent = theme === "dark" ? "☀️ Light" : "🌙 Dark";
+      localStorage.setItem("theme", theme);
+      setChartTheme();
+    }
+
+    // default เป็น dark แบบ SCADA
+    const savedTheme = localStorage.getItem("theme") || "dark";
+    applyTheme(savedTheme);
+
+    themeBtn.addEventListener("click", () => {
+      const cur = document.documentElement.getAttribute("data-theme");
+      applyTheme(cur === "dark" ? "light" : "dark");
     });
 
-    if (MQTT_STAT_TOPIC) {
-      mqttClient.subscribe(MQTT_STAT_TOPIC, { qos: 1 }, (err) => {
-        if (err) fastify.log.error(err, 'Subscribe status failed');
-        else fastify.log.info(`Subscribed status: ${MQTT_STAT_TOPIC}`);
-      });
-    }
-  });
+    // ===== Data refresh =====
+    async function refreshOnce() {
+      const deviceId = $("deviceId").value.trim();
+      const minutes  = Number($("minutes").value || 60);
+      if (!deviceId) return;
 
-  mqttClient.on('reconnect', () => { lastStatus.mqtt = 'reconnecting'; });
-  mqttClient.on('close', () => { lastStatus.mqtt = 'disconnected'; });
+      try {
+        await checkHealth();
+        await loadLatest(deviceId);
 
-  mqttClient.on('error', (err) => {
-    lastStatus.mqtt = 'error';
-    lastStatus.lastError = err?.message || String(err);
-    fastify.log.error(err, 'MQTT error');
-  });
+        const h = await loadHistory(deviceId, minutes);
+        ensureChart(h.labels, h.temp, h.hum);
 
-  mqttClient.on('message', async (topic, payload) => {
-    lastStatus.lastMessageAt = nowIso();
-    const text = payload.toString('utf8');
-
-    if (MQTT_STAT_TOPIC && topic === MQTT_STAT_TOPIC) {
-      fastify.log.info({ topic, text }, 'Status message');
-      return;
+        $("lastUpdate").textContent = "อัปเดต: " + new Date().toLocaleTimeString();
+        $("note").textContent =
+          `จุดข้อมูล: ${h.count} | ช่วงเวลา: ${fmtLocal(h.firstTs)} → ${fmtLocal(h.lastTs)} | ${h.url}`;
+      } catch (e) {
+        $("note").textContent = "โหลดกราฟไม่สำเร็จ: " + (e?.message || e);
+      }
     }
 
-    const parsed = parseTelemetry(text);
-    if (!parsed.ok) {
-      fastify.log.warn({ topic, text }, 'Telemetry not JSON / parse failed');
-      return;
+    function startAuto() {
+      stopAuto();
+      const sec = Math.max(2, Number($("refreshSec").value || 10));
+      timer = setInterval(refreshOnce, sec * 1000);
+      $("btnToggle").textContent = "หยุด auto";
     }
 
-    const device_id = parsed.device_id || guessDeviceIdFromTopic(topic);
-
-    try {
-      await insertTelemetry({ ts: parsed.ts, device_id, temp_c: parsed.temp_c, hum_pct: parsed.hum_pct, topic, raw_json: parsed.raw });
-      lastStatus.inserted++;
-    } catch (err) {
-      lastStatus.lastError = err?.message || String(err);
-      fastify.log.error(err, 'DB insert failed');
+    function stopAuto() {
+      if (timer) clearInterval(timer);
+      timer = null;
+      $("btnToggle").textContent = "เริ่ม auto";
     }
-  });
-}
 
-fastify.get('/', async (req, reply) => reply.sendFile('index.html'));
+    $("btnLoad").addEventListener("click", refreshOnce);
+    $("btnToggle").addEventListener("click", () => (timer ? stopAuto() : startAuto()));
 
-fastify.get('/info', async () => ({ ok: true, service: 'scada-backend', time: nowIso() }));
-
-fastify.get('/health', async () => {
-  const r = await pool.query('SELECT 1 as ok');
-  return {
-    ok: true,
-    time: nowIso(),
-    db: r.rows?.[0]?.ok === 1 ? 'ok' : 'unknown',
-    mqtt: lastStatus.mqtt,
-    lastMessageAt: lastStatus.lastMessageAt,
-    inserted: lastStatus.inserted,
-    lastError: lastStatus.lastError,
-  };
-});
-
-fastify.get('/api/latest', async (req) => {
-  const device_id = req.query?.device_id || DEVICE_ID_DEFAULT;
-  const q = `
-    SELECT ts, device_id, temp_c, hum_pct, topic
-    FROM telemetry_raw
-    WHERE device_id = $1
-    ORDER BY ts DESC
-    LIMIT 1
-  `;
-  const r = await pool.query(q, [device_id]);
-  return r.rows[0] || null;
-});
-
-fastify.get('/api/history', async (req) => {
-  const device_id = req.query?.device_id || DEVICE_ID_DEFAULT;
-  const minutes = Math.max(1, Math.min(24 * 60, Number(req.query?.minutes || 60)));
-
-  const q = `
-    SELECT ts, temp_c, hum_pct
-    FROM telemetry_raw
-    WHERE device_id = $1
-      AND ts >= now() - ($2::text || ' minutes')::interval
-    ORDER BY ts ASC
-  `;
-  const r = await pool.query(q, [device_id, String(minutes)]);
-  return r.rows;
-});
-
-async function start() {
-  await pool.query('SELECT now()');
-  fastify.log.info('DB connected OK');
-
-  scheduleCleanup();
-  startMqttIfConfigured();
-
-  await fastify.listen({ port: HTTP_PORT, host: '0.0.0.0' });
-  fastify.log.info(`HTTP listening on :${HTTP_PORT}`);
-}
-
-start().catch((err) => {
-  fastify.log.error(err);
-  process.exit(1);
-});
-
-async function shutdown() {
-  try {
-    if (mqttClient) mqttClient.end(true);
-    await pool.end();
-    await fastify.close();
-  } finally {
-    process.exit(0);
-  }
-}
-
-process.on('SIGINT', shutdown);
-process.on('SIGTERM', shutdown);
+    refreshOnce().then(startAuto);
+  </script>
+</body>
+</html>
