@@ -1,186 +1,255 @@
 /**
- * server.js (ESM) — SCADA MQTT -> Neon(Postgres)
- * Works with package.json: { "type": "module" }
+ * server.js — SCADA MQTT -> Postgres (Neon) + HTTP API (Fastify)
+ *
+ * Features:
+ * - Connects to HiveMQ Cloud over MQTT/TLS (mqtts)
+ * - Subscribes to telemetry + status topics
+ * - Normalizes payload fields (temperature/humidity OR temp_c/hum_pct)
+ * - Inserts into Postgres (Neon)
+ * - /health endpoint returns db/mqtt status + counters
+ * - /api/telemetry/latest + /api/telemetry?device_id=... endpoints
+ * - Retention cleanup scheduler
+ * - Adds GET/HEAD "/" so Render healthcheck won’t 404
  */
 
-console.log("BOOT MARK: server.js v2026-02-05-telemetry-fix-esm");
+"use strict";
 
-import fastifyFactory from "fastify";
-import mqtt from "mqtt";
-import pg from "pg";
+require("dotenv").config();
 
-const { Pool } = pg;
-
-const fastify = fastifyFactory({
-  logger: { level: process.env.LOG_LEVEL || "info" },
+const fastify = require("fastify")({
+  logger: true,
 });
 
-/* ================== CONFIG ================== */
+const cors = require("@fastify/cors");
+const mqtt = require("mqtt");
+const { Pool } = require("pg");
+
+// -------------------- Config --------------------
 const PORT = Number(process.env.PORT || 10000);
 
-// DB
+// Postgres (Neon)
 const DATABASE_URL = process.env.DATABASE_URL;
+const PG_SSL =
+  process.env.PG_SSL === "false"
+    ? false
+    : { rejectUnauthorized: true }; // Neon typically needs SSL
 
 // MQTT
-const MQTT_HOST = process.env.MQTT_HOST;
-const MQTT_PORT = Number(process.env.MQTT_PORT || 8883);
+const MQTT_URL =
+  process.env.MQTT_URL ||
+  process.env.MQTT_HOST
+    ? `mqtts://${process.env.MQTT_HOST}:${process.env.MQTT_PORT || 8883}`
+    : undefined;
+
 const MQTT_USER = process.env.MQTT_USER;
 const MQTT_PASS = process.env.MQTT_PASS;
 
+// Topics
 const TOPIC_TELE = process.env.TOPIC_TELE || "cp/test/dht22/telemetry";
 const TOPIC_STAT = process.env.TOPIC_STAT || "cp/test/dht22/status";
 
-// Retention / cleanup
+// Retention
 const RETENTION_DAYS = Number(process.env.RETENTION_DAYS || 30);
 const CLEANUP_EVERY_MINUTES = Number(process.env.CLEANUP_EVERY_MINUTES || 360);
 
-/* ================== STATE ================== */
+// -------------------- Runtime status --------------------
 let mqttClient = null;
-let lastMessageAt = null;
-let lastError = null;
+let mqttConnected = false;
+
 let inserted = 0;
+let lastMessageAt = null; // ISO string
+let lastError = null;
 
-const lastStatusByDevice = new Map();
-
-/* ================== HELPERS ================== */
-function nowIso() {
-  return new Date().toISOString();
-}
-
-function parseJsonSafe(text) {
+// -------------------- Helpers --------------------
+function safeJsonParse(str) {
   try {
-    return { ok: true, value: JSON.parse(text) };
+    return { ok: true, value: JSON.parse(str) };
   } catch (e) {
     return { ok: false, error: e };
   }
 }
 
-function isFiniteNumber(x) {
-  return typeof x === "number" && Number.isFinite(x);
+function deviceIdFromTopic(topic) {
+  // If you ever want to derive device_id from topic segments,
+  // do it here. For now, return null.
+  return null;
 }
 
-function normalizeTelemetry(data, fallbackDeviceId = "unknown") {
-  const device_id = data.device_id || fallbackDeviceId;
+/**
+ * Normalize telemetry:
+ * Supports:
+ * - { temperature, humidity }
+ * - { temp_c, hum_pct }
+ * - { temp, hum }
+ */
+function normalizeTelemetry(payload, topic) {
+  const device_id = payload.device_id || deviceIdFromTopic(topic) || "unknown";
 
-  const temperature = data.temp_c ?? data.temperature ?? data.temp ?? data.t;
-  const humidity = data.hum_pct ?? data.humidity ?? data.hum ?? data.h;
+  const temperature = Number(
+    payload.temperature ??
+      payload.temp_c ??
+      payload.temp ??
+      payload.t ??
+      payload.tempC
+  );
 
-  const dht_ok = data.dht_ok ?? data.ok ?? null;
+  const humidity = Number(
+    payload.humidity ?? payload.hum_pct ?? payload.hum ?? payload.h ?? payload.rh
+  );
 
-  let at = new Date();
-  const tsNum =
-    typeof data.ts === "number"
-      ? data.ts
-      : typeof data.timestamp === "number"
-        ? data.timestamp
-        : null;
+  const dht_ok =
+    typeof payload.dht_ok === "boolean"
+      ? payload.dht_ok
+      : payload.dht_ok == null
+        ? null
+        : Boolean(payload.dht_ok);
 
-  if (typeof tsNum === "number") {
-    at = tsNum < 1e12 ? new Date(tsNum * 1000) : new Date(tsNum);
-  } else if (typeof data.ts === "string") {
-    const d = new Date(data.ts);
-    if (!Number.isNaN(d.getTime())) at = d;
-  } else if (typeof data.at === "string") {
-    const d = new Date(data.at);
-    if (!Number.isNaN(d.getTime())) at = d;
+  // ts can be:
+  // - epoch seconds (like 1770340028)
+  // - epoch ms
+  // - ISO string
+  let ts = new Date();
+  if (payload.ts != null) {
+    if (typeof payload.ts === "number") {
+      ts = new Date(payload.ts > 1e12 ? payload.ts : payload.ts * 1000);
+    } else if (typeof payload.ts === "string") {
+      const asNum = Number(payload.ts);
+      if (Number.isFinite(asNum)) {
+        ts = new Date(asNum > 1e12 ? asNum : asNum * 1000);
+      } else {
+        const d = new Date(payload.ts);
+        if (!Number.isNaN(d.getTime())) ts = d;
+      }
+    }
   }
 
-  return { device_id, at, temperature, humidity, dht_ok, raw: data };
+  // Optional extras
+  const raw = payload;
+
+  const ok =
+    Number.isFinite(temperature) && Number.isFinite(humidity) && device_id;
+
+  return {
+    ok,
+    device_id,
+    ts,
+    temperature,
+    humidity,
+    dht_ok,
+    raw,
+  };
 }
 
-/* ================== DB ================== */
-async function main() {
-  if (!DATABASE_URL) throw new Error("Missing DATABASE_URL");
-  if (!MQTT_HOST) throw new Error("Missing MQTT_HOST");
-  if (!MQTT_USER) throw new Error("Missing MQTT_USER");
-  if (!MQTT_PASS) throw new Error("Missing MQTT_PASS");
+// -------------------- DB --------------------
+if (!DATABASE_URL) {
+  // Hard fail with a clear message (Render logs)
+  fastify.log.error("Missing DATABASE_URL env var");
+}
 
-  const pool = new Pool({
-    connectionString: DATABASE_URL,
-    ssl: { rejectUnauthorized: false },
-  });
+const pool = new Pool({
+  connectionString: DATABASE_URL,
+  ssl: PG_SSL,
+});
 
-  async function ensureSchema() {
-    await pool.query(`
-      CREATE TABLE IF NOT EXISTS telemetry (
-        id BIGSERIAL PRIMARY KEY,
-        device_id TEXT NOT NULL,
-        at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-        temp_c DOUBLE PRECISION NOT NULL,
-        hum_pct DOUBLE PRECISION NOT NULL,
-        dht_ok BOOLEAN,
-        raw JSONB
-      );
-    `);
-
-    await pool.query(`
-      CREATE INDEX IF NOT EXISTS telemetry_device_at_idx
-      ON telemetry (device_id, at DESC);
-    `);
-  }
-
-  async function insertTelemetry(row) {
-    const q = `
-      INSERT INTO telemetry (device_id, at, temp_c, hum_pct, dht_ok, raw)
-      VALUES ($1, $2, $3, $4, $5, $6)
-    `;
-    await pool.query(q, [
-      row.device_id,
-      row.at,
-      row.temperature,
-      row.humidity,
-      row.dht_ok,
-      row.raw,
-    ]);
-    inserted += 1;
-  }
-
-  async function cleanupOldTelemetry() {
-    const q = `
-      DELETE FROM telemetry
-      WHERE at < NOW() - ($1 || ' days')::interval
-    `;
-    const res = await pool.query(q, [String(RETENTION_DAYS)]);
-    fastify.log.info(
-      { deleted: res.rowCount, retention_days: RETENTION_DAYS },
-      "Cleanup old telemetry done"
-    );
-  }
-
-  await ensureSchema();
+async function initDb() {
+  await pool.query("SELECT 1;");
   fastify.log.info("DB connected OK");
 
+  // Create table if not exists
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS telemetry (
+      id BIGSERIAL PRIMARY KEY,
+      device_id TEXT NOT NULL,
+      ts TIMESTAMPTZ NOT NULL DEFAULT now(),
+      temperature DOUBLE PRECISION,
+      humidity DOUBLE PRECISION,
+      dht_ok BOOLEAN,
+      raw JSONB
+    );
+  `);
+
+  await pool.query(`
+    CREATE INDEX IF NOT EXISTS telemetry_device_ts_idx
+    ON telemetry (device_id, ts DESC);
+  `);
+}
+
+async function insertTelemetry(row) {
+  const q = `
+    INSERT INTO telemetry (device_id, ts, temperature, humidity, dht_ok, raw)
+    VALUES ($1, $2, $3, $4, $5, $6)
+  `;
+  const vals = [
+    row.device_id,
+    row.ts,
+    row.temperature,
+    row.humidity,
+    row.dht_ok,
+    row.raw,
+  ];
+  await pool.query(q, vals);
+  inserted += 1;
+}
+
+async function cleanupOldTelemetry() {
+  const q = `
+    DELETE FROM telemetry
+    WHERE ts < (now() - ($1 || ' days')::interval)
+  `;
+  const res = await pool.query(q, [RETENTION_DAYS]);
+  fastify.log.info(
+    { deleted: res.rowCount, retention_days: RETENTION_DAYS },
+    "Cleanup old telemetry done"
+  );
+}
+
+function startCleanupScheduler() {
+  // Run once on boot
+  cleanupOldTelemetry().catch((e) => {
+    lastError = `cleanup: ${e.message}`;
+    fastify.log.error(e, "Cleanup failed");
+  });
+
+  const ms = CLEANUP_EVERY_MINUTES * 60 * 1000;
   setInterval(() => {
     cleanupOldTelemetry().catch((e) => {
-      lastError = `Cleanup failed: ${e.message}`;
-      fastify.log.error({ err: e }, "Cleanup failed");
+      lastError = `cleanup: ${e.message}`;
+      fastify.log.error(e, "Cleanup failed");
     });
-  }, CLEANUP_EVERY_MINUTES * 60 * 1000);
+  }, ms);
 
   fastify.log.info(
     { every_minutes: CLEANUP_EVERY_MINUTES, retention_days: RETENTION_DAYS },
     "Cleanup scheduler started"
   );
+}
 
-  cleanupOldTelemetry().catch(() => {});
+// -------------------- MQTT --------------------
+function initMqtt() {
+  if (!MQTT_URL) {
+    fastify.log.error(
+      "Missing MQTT_URL (or MQTT_HOST/MQTT_PORT). MQTT will not start."
+    );
+    return;
+  }
 
-  /* ================== MQTT ================== */
-  const url = `mqtts://${MQTT_HOST}:${MQTT_PORT}`;
-  mqttClient = mqtt.connect(url, {
+  mqttClient = mqtt.connect(MQTT_URL, {
     username: MQTT_USER,
     password: MQTT_PASS,
-    keepalive: 60,
-    reconnectPeriod: 3000,
-    connectTimeout: 30_000,
+    reconnectPeriod: 2000,
+    keepalive: 30,
+    // For HiveMQ Cloud, mqtt.js uses Node TLS under the hood.
+    // If you ever need custom CA, you can pass `ca: fs.readFileSync(...)`.
   });
 
   mqttClient.on("connect", () => {
-    fastify.log.info({ msg: `MQTT connected: ${url}` });
+    mqttConnected = true;
+    fastify.log.info({ msg: `MQTT connected: ${MQTT_URL}` });
 
     mqttClient.subscribe(TOPIC_TELE, { qos: 0 }, (err) => {
       if (err) {
-        lastError = `Subscribe telemetry failed: ${err.message}`;
-        fastify.log.error({ err }, "Subscribe telemetry failed");
+        lastError = `mqtt subscribe telemetry: ${err.message}`;
+        fastify.log.error(err, "Subscribe telemetry failed");
       } else {
         fastify.log.info({ msg: `Subscribed telemetry: ${TOPIC_TELE}` });
       }
@@ -188,140 +257,203 @@ async function main() {
 
     mqttClient.subscribe(TOPIC_STAT, { qos: 0 }, (err) => {
       if (err) {
-        lastError = `Subscribe status failed: ${err.message}`;
-        fastify.log.error({ err }, "Subscribe status failed");
+        lastError = `mqtt subscribe status: ${err.message}`;
+        fastify.log.error(err, "Subscribe status failed");
       } else {
         fastify.log.info({ msg: `Subscribed status: ${TOPIC_STAT}` });
       }
     });
   });
 
-  mqttClient.on("reconnect", () => fastify.log.warn("MQTT reconnecting..."));
-  mqttClient.on("error", (err) => {
-    lastError = `MQTT error: ${err.message}`;
-    fastify.log.error({ err }, "MQTT error");
+  mqttClient.on("reconnect", () => {
+    mqttConnected = false;
+    fastify.log.warn("MQTT reconnecting...");
   });
 
-  mqttClient.on("message", async (topic, message) => {
-    lastMessageAt = nowIso();
+  mqttClient.on("close", () => {
+    mqttConnected = false;
+    fastify.log.warn("MQTT connection closed");
+  });
 
+  mqttClient.on("error", (err) => {
+    mqttConnected = false;
+    lastError = `mqtt: ${err.message}`;
+    fastify.log.error(err, "MQTT error");
+  });
+
+  mqttClient.on("message", async (topic, messageBuf) => {
+    const text = messageBuf.toString("utf8");
+    lastMessageAt = new Date().toISOString();
+
+    // STATUS
     if (topic === TOPIC_STAT) {
-      const text = message.toString("utf8").trim();
-      const parsed = parseJsonSafe(text);
-      if (parsed.ok && parsed.value && typeof parsed.value === "object") {
-        const device_id = parsed.value.device_id || "unknown";
-        const status = parsed.value.status || parsed.value.state || text;
-        lastStatusByDevice.set(device_id, { status: String(status), at: new Date() });
-        fastify.log.info({ topic, device_id, status }, "Status message (json)");
-      } else {
-        lastStatusByDevice.set("unknown", { status: text, at: new Date() });
-        fastify.log.info({ topic, text }, "Status message");
-      }
+      fastify.log.info({ topic, text }, "Status message");
       return;
     }
 
+    // TELEMETRY
     if (topic === TOPIC_TELE) {
-      const text = message.toString("utf8").trim();
-      const parsed = parseJsonSafe(text);
+      const parsed = safeJsonParse(text);
       if (!parsed.ok) {
-        lastError = `Telemetry not JSON: ${parsed.error.message}`;
-        fastify.log.warn({ topic, text }, "Telemetry not JSON");
+        lastError = `telemetry not json: ${parsed.error.message}`;
+        fastify.log.warn({ topic, text }, "Telemetry not JSON / parse failed");
         return;
       }
 
-      const row = normalizeTelemetry(parsed.value, "unknown");
-      if (!isFiniteNumber(row.temperature) || !isFiniteNumber(row.humidity)) {
-        lastError = "Telemetry missing temp/hum (number)";
-        fastify.log.warn({ topic, data: parsed.value }, "Telemetry missing temp/hum");
+      const norm = normalizeTelemetry(parsed.value, topic);
+      if (!norm.ok) {
+        lastError = "telemetry missing temperature/humidity/device_id";
+        fastify.log.warn(
+          { topic, payload: parsed.value },
+          "Telemetry missing required fields; skip insert"
+        );
         return;
       }
 
       try {
-        await insertTelemetry(row);
-        fastify.log.info(
-          {
-            device_id: row.device_id,
-            at: row.at.toISOString(),
-            temp_c: row.temperature,
-            hum_pct: row.humidity,
-            inserted,
-          },
-          "Telemetry inserted"
-        );
-      } catch (err) {
-        lastError = `DB insert failed: ${err.message}`;
-        fastify.log.error({ err, topic, data: parsed.value }, "DB insert failed");
+        await insertTelemetry(norm);
+        // Uncomment if you want very chatty logs:
+        // fastify.log.info({ device_id: norm.device_id, temperature: norm.temperature, humidity: norm.humidity }, "Telemetry inserted");
+      } catch (e) {
+        lastError = `db insert: ${e.message}`;
+        fastify.log.error(e, "DB insert failed");
       }
+      return;
     }
-  });
 
-  /* ================== ROUTES ================== */
+    // Other topics (if any)
+    fastify.log.debug({ topic, text }, "MQTT message ignored");
+  });
+}
+
+// -------------------- HTTP API --------------------
+async function initHttp() {
+  await fastify.register(cors, { origin: true });
+
+  // Root routes to avoid Render HEAD / 404
+  fastify.get("/", async () => {
+    return { ok: true, service: "scada-backend", ts: new Date().toISOString() };
+  });
   fastify.head("/", async (_req, reply) => reply.code(200).send());
 
-  fastify.get("/", async () => ({
-    ok: true,
-    service: "scada-backend",
-    time: nowIso(),
-    routes: ["/health", "/telemetry/latest", "/telemetry"],
-  }));
-
   fastify.get("/health", async () => {
-    let db = "unknown";
+    // quick db check without heavy load
+    let db = "ok";
     try {
-      await pool.query("SELECT 1");
-      db = "ok";
+      await pool.query("SELECT 1;");
     } catch (e) {
-      db = "error";
-      lastError = `DB health failed: ${e.message}`;
+      db = "down";
+      lastError = `db health: ${e.message}`;
     }
-
-    const mqttState = mqttClient && mqttClient.connected ? "connected" : "disconnected";
 
     return {
       ok: true,
-      time: nowIso(),
+      time: new Date().toISOString(),
       db,
-      mqtt: mqttState,
+      mqtt: mqttConnected ? "connected" : "disconnected",
       lastMessageAt,
       inserted,
       lastError,
+      topics: { telemetry: TOPIC_TELE, status: TOPIC_STAT },
+      retention_days: RETENTION_DAYS,
     };
   });
 
-  fastify.get("/telemetry/latest", async (req) => {
-    const device_id = (req.query.device_id || "dht22-01").toString();
-    const { rows } = await pool.query(
-      `SELECT device_id, at, temp_c, hum_pct, dht_ok
-       FROM telemetry
-       WHERE device_id = $1
-       ORDER BY at DESC
-       LIMIT 1`,
-      [device_id]
-    );
-    return { device_id, latest: rows[0] || null };
+  // Latest per device (or all devices)
+  fastify.get("/api/telemetry/latest", async (req) => {
+    const device_id = req.query.device_id;
+
+    if (device_id) {
+      const { rows } = await pool.query(
+        `
+        SELECT device_id, ts, temperature, humidity, dht_ok, raw
+        FROM telemetry
+        WHERE device_id = $1
+        ORDER BY ts DESC
+        LIMIT 1
+      `,
+        [device_id]
+      );
+      return { device_id, latest: rows[0] || null };
+    }
+
+    // Latest row per device
+    const { rows } = await pool.query(`
+      SELECT DISTINCT ON (device_id)
+        device_id, ts, temperature, humidity, dht_ok, raw
+      FROM telemetry
+      ORDER BY device_id, ts DESC
+    `);
+    return { latest: rows };
   });
 
-  fastify.get("/telemetry", async (req) => {
-    const device_id = (req.query.device_id || "dht22-01").toString();
-    const limit = Math.max(1, Math.min(500, Number(req.query.limit || 200)));
+  // Query time range
+  fastify.get("/api/telemetry", async (req) => {
+    const device_id = req.query.device_id;
+    const limit = Math.min(Number(req.query.limit || 200), 2000);
+    const from = req.query.from ? new Date(req.query.from) : null;
+    const to = req.query.to ? new Date(req.query.to) : null;
 
-    const { rows } = await pool.query(
-      `SELECT device_id, at, temp_c, hum_pct, dht_ok
-       FROM telemetry
-       WHERE device_id = $1
-       ORDER BY at DESC
-       LIMIT $2`,
-      [device_id, limit]
-    );
+    const where = [];
+    const params = [];
 
-    return { device_id, count: rows.length, rows };
+    if (device_id) {
+      params.push(device_id);
+      where.push(`device_id = $${params.length}`);
+    }
+    if (from && !Number.isNaN(from.getTime())) {
+      params.push(from);
+      where.push(`ts >= $${params.length}`);
+    }
+    if (to && !Number.isNaN(to.getTime())) {
+      params.push(to);
+      where.push(`ts <= $${params.length}`);
+    }
+
+    params.push(limit);
+
+    const sql = `
+      SELECT device_id, ts, temperature, humidity, dht_ok
+      FROM telemetry
+      ${where.length ? "WHERE " + where.join(" AND ") : ""}
+      ORDER BY ts DESC
+      LIMIT $${params.length}
+    `;
+
+    const { rows } = await pool.query(sql, params);
+    return { count: rows.length, rows };
   });
-
-  await fastify.listen({ port: PORT, host: "0.0.0.0" });
-  fastify.log.info(`HTTP listening on :${PORT}`);
 }
 
-main().catch((err) => {
-  console.error(err);
-  process.exit(1);
+// -------------------- Boot --------------------
+async function main() {
+  try {
+    await initDb();
+    startCleanupScheduler();
+    await initHttp();
+    initMqtt();
+
+    await fastify.listen({ port: PORT, host: "0.0.0.0" });
+    fastify.log.info(`HTTP listening on :${PORT}`);
+  } catch (e) {
+    lastError = e.message;
+    fastify.log.error(e, "Fatal startup error");
+    process.exit(1);
+  }
+}
+
+main();
+
+// Graceful shutdown
+process.on("SIGTERM", async () => {
+  try {
+    fastify.log.info("SIGTERM received: closing...");
+    if (mqttClient) mqttClient.end(true);
+    await fastify.close();
+    await pool.end();
+  } catch (e) {
+    // ignore
+  } finally {
+    process.exit(0);
+  }
 });
