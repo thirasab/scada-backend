@@ -1,16 +1,16 @@
 {
-  "name": "scada-backend",
+  "name": "scada-mqtt-to-neon",
   "version": "1.0.0",
-  "private": true,
-  "main": "server.cjs",
+  "type": "module",
+  "main": "server.js",
   "scripts": {
-    "start": "node server.cjs"
+    "start": "node server.js",
+    "dev": "node server.js"
   },
   "dependencies": {
-    "@fastify/cors": "^8.5.0",
     "dotenv": "^16.4.5",
     "fastify": "^4.28.1",
-    "mqtt": "^5.10.4",
+    "mqtt": "^5.10.3",
     "pg": "^8.12.0"
   }
 }
