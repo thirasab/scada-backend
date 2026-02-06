@@ -515,9 +515,11 @@
         $("lastUpdate").textContent = "อัปเดต: " + new Date().toLocaleTimeString();
         $("note").textContent =
           `จุดข้อมูล: ${h.count} | ช่วงเวลา: ${fmtLocal(h.firstTs)} → ${fmtLocal(h.lastTs)} | ${h.url}`;
-      } catch (e) {
-        $("note").textContent = "โหลดกราฟไม่สำเร็จ: " + (e?.message || e);
-      }
+      } } catch (e) {
+  console.error(e);
+  $("note").textContent = "ERROR: " + (e?.message || e);
+}
+
     }
 
     function startAuto() {
