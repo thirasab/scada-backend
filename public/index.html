@@ -8,6 +8,7 @@
   <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
 
   <style>
+    /* ===== Base layout ===== */
     :root { color-scheme: light dark; }
     body { font-family: system-ui, -apple-system, Segoe UI, Roboto, Arial, sans-serif; margin: 0; padding: 16px; }
     .wrap { max-width: 1100px; margin: 0 auto; }
@@ -53,6 +54,87 @@
     .bad { background: #ef4444; }
     .warn { background: #f59e0b; }
     .mono { font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace; }
+
+    /* ===== SCADA THEME (Light + Dark) ===== */
+    :root{
+      color-scheme: light;
+      --bg: #f6f7fb;
+      --panel: rgba(255,255,255,.75);
+      --panel2: rgba(255,255,255,.55);
+      --stroke: rgba(17,24,39,.18);
+      --text: #0b1220;
+      --muted2: rgba(11,18,32,.70);
+
+      --accent: #2563eb;
+      --ok2: #16a34a;
+      --warn2: #f59e0b;
+      --bad2: #dc2626;
+
+      --glow: transparent;
+      --shadow: 0 8px 28px rgba(0,0,0,.08);
+    }
+
+    [data-theme="dark"]{
+      color-scheme: dark;
+      --bg: #05070b;
+      --panel: rgba(10,14,22,.88);
+      --panel2: rgba(10,14,22,.62);
+      --stroke: rgba(120,255,210,.18);
+      --text: #d9ffe9;
+      --muted2: rgba(217,255,233,.70);
+
+      --accent: #2dffb2;
+      --ok2: #2dffb2;
+      --warn2: #ffb020;
+      --bad2: #ff3b5c;
+
+      --glow: 0 0 18px rgba(45,255,178,.20), 0 0 42px rgba(45,255,178,.10);
+      --shadow: 0 14px 40px rgba(0,0,0,.55);
+    }
+
+    body{
+      background: radial-gradient(1200px 700px at 20% 10%, rgba(45,255,178,.05), transparent 60%),
+                  radial-gradient(900px 600px at 80% 20%, rgba(255,176,32,.04), transparent 55%),
+                  var(--bg);
+      color: var(--text);
+    }
+
+    .muted{ opacity: 1; color: var(--muted2); }
+    .mono{ color: rgba(217,255,233,.85); }
+
+    .card, .chartCard{
+      background: linear-gradient(180deg, var(--panel), var(--panel2));
+      border: 1px solid var(--stroke);
+      box-shadow: var(--shadow);
+      backdrop-filter: blur(8px);
+    }
+
+    input, select{
+      border: 1px solid var(--stroke);
+      background: rgba(0,0,0,.08);
+    }
+    [data-theme="dark"] input,
+    [data-theme="dark"] select{
+      background: rgba(0,0,0,.22);
+    }
+
+    button{
+      border: 1px solid var(--stroke);
+      background: rgba(0,0,0,.06);
+    }
+    [data-theme="dark"] button{
+      background: rgba(0,0,0,.28);
+      box-shadow: var(--glow);
+    }
+    button:hover{ filter: brightness(1.08); }
+
+    h1{ letter-spacing: .6px; }
+    [data-theme="dark"] h1{ text-shadow: var(--glow); }
+
+    .statusDot{ background: rgba(255,255,255,.35); }
+    .ok{ background: var(--ok2); box-shadow: 0 0 14px rgba(45,255,178,.35); }
+    .warn{ background: var(--warn2); box-shadow: 0 0 14px rgba(255,176,32,.28); }
+    .bad{ background: var(--bad2); box-shadow: 0 0 14px rgba(255,59,92,.28); }
   </style>
 </head>
 
@@ -60,9 +142,14 @@
   <div class="wrap">
     <div class="title">
       <h1>SCADA Dashboard</h1>
-      <div class="muted">
-        <span id="healthDot" class="statusDot"></span>
-        <span id="healthText">checking…</span>
+
+      <div style="display:flex; gap:10px; align-items:center;">
+        <button id="themeBtn">🌙 Dark</button>
+
+        <div class="muted">
+          <span id="healthDot" class="statusDot"></span>
+          <span id="healthText">checking…</span>
+        </div>
       </div>
     </div>
 
@@ -110,191 +197,233 @@
     </div>
   </div>
 
-<script>
-  const $ = (id) => document.getElementById(id);
+  <script>
+    const $ = (id) => document.getElementById(id);
 
-  let timer = null;
-  let chart = null;
+    let timer = null;
+    let chart = null;
 
-  function fmtLocal(iso) {
-    if (!iso) return "—";
-    const d = new Date(iso);
-    // แสดงแบบ locale ของ browser
-    return d.toLocaleString();
-  }
+    function fmtLocal(iso) {
+      if (!iso) return "—";
+      const d = new Date(iso);
+      return d.toLocaleString();
+    }
 
-  async function checkHealth() {
-    // ใช้ /healt ตามของคุณ (สะกดแบบนั้น)
-    // ถ้าโปรเจกต์คุณใช้ /health ให้เปลี่ยนบรรทัดนี้เป็น "/health"
-    const url = "/healt";
-    try {
+    async function checkHealth() {
+      const url = "/health"; // ✅ ให้ตรงกับ server.js
+      try {
+        const res = await fetch(url, { cache: "no-store" });
+        const ok = res.ok;
+        $("healthDot").className = "statusDot " + (ok ? "ok" : "bad");
+        $("healthText").textContent = ok ? "backend ok" : ("backend error (" + res.status + ")");
+      } catch (e) {
+        $("healthDot").className = "statusDot bad";
+        $("healthText").textContent = "backend offline";
+      }
+    }
+
+    async function loadLatest(deviceId) {
+      try {
+        const res = await fetch(`/api/latest?device_id=${encodeURIComponent(deviceId)}`, { cache: "no-store" });
+        if (!res.ok) throw new Error("latest status " + res.status);
+        const x = await res.json();
+        if (!x) return;
+
+        $("latestTemp").innerHTML = `${Number(x.temp_c ?? NaN).toFixed(2)} <small>°C</small>`;
+        $("latestHum").innerHTML  = `${Number(x.hum_pct ?? NaN).toFixed(2)} <small>%</small>`;
+        $("latestTs").textContent = `เวลา: ${fmtLocal(x.ts)} | topic: ${x.topic ?? "-"}`;
+      } catch (e) {
+        $("latestTs").textContent = "โหลด latest ไม่ได้";
+      }
+    }
+
+    async function loadHistory(deviceId, minutes) {
+      const url = `/api/history?device_id=${encodeURIComponent(deviceId)}&minutes=${encodeURIComponent(minutes)}`;
       const res = await fetch(url, { cache: "no-store" });
-      const ok = res.ok;
-      $("healthDot").className = "statusDot " + (ok ? "ok" : "bad");
-      $("healthText").textContent = ok ? "backend ok" : ("backend error (" + res.status + ")");
-    } catch (e) {
-      $("healthDot").className = "statusDot bad";
-      $("healthText").textContent = "backend offline";
+      if (!res.ok) throw new Error("history status " + res.status);
+      const arr = await res.json();
+      if (!Array.isArray(arr)) throw new Error("history not array");
+
+      arr.sort((a,b) => new Date(a.ts) - new Date(b.ts));
+
+      const labels = arr.map(r => new Date(r.ts));
+      const temp = arr.map(r => Number(r.temp_c));
+      const hum  = arr.map(r => Number(r.hum_pct));
+
+      return { labels, temp, hum, count: arr.length, firstTs: arr[0]?.ts, lastTs: arr[arr.length - 1]?.ts, url };
     }
-  }
 
-  async function loadLatest(deviceId) {
-    try {
-      const res = await fetch(`/api/latest?device_id=${encodeURIComponent(deviceId)}`, { cache: "no-store" });
-      if (!res.ok) throw new Error("latest status " + res.status);
-      const x = await res.json();
-      if (!x) return;
+    function setChartTheme() {
+      if (!chart) return;
 
-      $("latestTemp").innerHTML = `${Number(x.temp_c ?? NaN).toFixed(2)} <small>°C</small>`;
-      $("latestHum").innerHTML  = `${Number(x.hum_pct ?? NaN).toFixed(2)} <small>%</small>`;
-      $("latestTs").textContent = `เวลา: ${fmtLocal(x.ts)} | topic: ${x.topic ?? "-"}`;
-    } catch (e) {
-      // ไม่ทำให้ทั้งหน้าแตก
-      $("latestTs").textContent = "โหลด latest ไม่ได้";
-    }
-  }
+      const dark = document.documentElement.getAttribute("data-theme") === "dark";
+      const grid = dark ? "rgba(45,255,178,.10)" : "rgba(17,24,39,.10)";
+      const tick = dark ? "rgba(217,255,233,.85)" : "rgba(11,18,32,.75)";
+      const border = dark ? "rgba(45,255,178,.25)" : "rgba(17,24,39,.18)";
 
-  async function loadHistory(deviceId, minutes) {
-    const url = `/api/history?device_id=${encodeURIComponent(deviceId)}&minutes=${encodeURIComponent(minutes)}`;
-    const res = await fetch(url, { cache: "no-store" });
-    if (!res.ok) throw new Error("history status " + res.status);
-    const arr = await res.json();
-    if (!Array.isArray(arr)) throw new Error("history not array");
+      chart.options.scales.x.grid.color = grid;
+      chart.options.scales.yTemp.grid.color = grid;
+      chart.options.scales.yHum.grid.color = grid;
 
-    // เรียงตามเวลา (กันกรณี DB คืนมาไม่เรียง)
-    arr.sort((a,b) => new Date(a.ts) - new Date(b.ts));
+      chart.options.scales.x.ticks.color = tick;
+      chart.options.scales.yTemp.ticks.color = tick;
+      chart.options.scales.yHum.ticks.color = tick;
 
-    const labels = arr.map(r => new Date(r.ts));
-    const temp = arr.map(r => Number(r.temp_c));
-    const hum  = arr.map(r => Number(r.hum_pct));
+      chart.options.scales.x.border.color = border;
+      chart.options.scales.yTemp.border.color = border;
+      chart.options.scales.yHum.border.color = border;
 
-    return { labels, temp, hum, count: arr.length, firstTs: arr[0]?.ts, lastTs: arr[arr.length - 1]?.ts, url };
-  }
+      chart.options.plugins.legend.labels.color = tick;
 
-  function ensureChart(labels, temp, hum) {
-    const ctx = $("chart").getContext("2d");
+      chart.data.datasets[0].borderColor = dark ? "#2dffb2" : "#2563eb";
+      chart.data.datasets[1].borderColor = dark ? "#ffb020" : "#f59e0b";
 
-    if (chart) {
-      chart.data.labels = labels;
-      chart.data.datasets[0].data = temp;
-      chart.data.datasets[1].data = hum;
       chart.update();
-      return;
     }
 
-    chart = new Chart(ctx, {
-      type: "line",
-      data: {
-        labels,
-        datasets: [
-          {
-            label: "Temperature (°C)",
-            data: temp,
-            borderWidth: 2,
-            pointRadius: 0,
-            tension: 0.25,
-            yAxisID: "yTemp",
-          },
-          {
-            label: "Humidity (%)",
-            data: hum,
-            borderWidth: 2,
-            pointRadius: 0,
-            tension: 0.25,
-            yAxisID: "yHum",
-          }
-        ]
-      },
-      options: {
-        responsive: true,
-        maintainAspectRatio: false,
-        interaction: { mode: "index", intersect: false },
-        plugins: {
-          legend: { position: "top" },
-          tooltip: {
-            callbacks: {
-              title: (items) => {
-                const d = items?.[0]?.label;
-                return d ? new Date(d).toLocaleString() : "";
+    function ensureChart(labels, temp, hum) {
+      const ctx = $("chart").getContext("2d");
+
+      if (chart) {
+        chart.data.labels = labels;
+        chart.data.datasets[0].data = temp;
+        chart.data.datasets[1].data = hum;
+        setChartTheme();
+        chart.update();
+        return;
+      }
+
+      chart = new Chart(ctx, {
+        type: "line",
+        data: {
+          labels,
+          datasets: [
+            {
+              label: "Temperature (°C)",
+              data: temp,
+              borderWidth: 2,
+              pointRadius: 0,
+              tension: 0.25,
+              yAxisID: "yTemp",
+              borderColor: "#2dffb2"
+            },
+            {
+              label: "Humidity (%)",
+              data: hum,
+              borderWidth: 2,
+              pointRadius: 0,
+              tension: 0.25,
+              yAxisID: "yHum",
+              borderColor: "#ffb020"
+            }
+          ]
+        },
+        options: {
+          responsive: true,
+          maintainAspectRatio: false,
+          interaction: { mode: "index", intersect: false },
+          plugins: {
+            legend: { position: "top" },
+            tooltip: {
+              callbacks: {
+                title: (items) => {
+                  const d = items?.[0]?.label;
+                  return d ? new Date(d).toLocaleString() : "";
+                }
               }
             }
-          }
-        },
-        scales: {
-          x: {
-            type: "time",
-            time: { unit: "minute" }
           },
-          yTemp: {
-            type: "linear",
-            position: "left",
-            title: { display: true, text: "°C" }
-          },
-          yHum: {
-            type: "linear",
-            position: "right",
-            title: { display: true, text: "%" },
-            grid: { drawOnChartArea: false }
+          scales: {
+            x: {
+              type: "time",
+              time: { unit: "minute" }
+            },
+            yTemp: {
+              type: "linear",
+              position: "left",
+              title: { display: true, text: "°C" }
+            },
+            yHum: {
+              type: "linear",
+              position: "right",
+              title: { display: true, text: "%" },
+              grid: { drawOnChartArea: false }
+            }
           }
         }
-      }
-    });
-  }
+      });
 
-  // Chart.js time scale ต้องมี adapter (ใน v4 แนะนำใช้ date adapter)
-  // วิธีง่ายสุด: ใช้ "chartjs-adapter-date-fns"
-</script>
-
-<!-- เพิ่ม date adapter สำหรับ time scale -->
-<script src="https://cdn.jsdelivr.net/npm/date-fns@3.6.0"></script>
-<script src="https://cdn.jsdelivr.net/npm/chartjs-adapter-date-fns@3.0.0"></script>
-
-<script>
-  async function refreshOnce() {
-    const deviceId = $("deviceId").value.trim();
-    const minutes  = Number($("minutes").value || 60);
-
-    if (!deviceId) return;
-
-    try {
-      await checkHealth();
-      await loadLatest(deviceId);
-
-      const h = await loadHistory(deviceId, minutes);
-      ensureChart(h.labels, h.temp, h.hum);
-
-      $("lastUpdate").textContent = "อัปเดต: " + new Date().toLocaleTimeString();
-      $("note").textContent =
-        `จุดข้อมูล: ${h.count} | ช่วงเวลา: ${fmtLocal(h.firstTs)} → ${fmtLocal(h.lastTs)} | ${h.url}`;
-    } catch (e) {
-      $("note").textContent = "โหลดกราฟไม่สำเร็จ: " + (e?.message || e);
+      setChartTheme();
     }
-  }
+  </script>
 
-  function startAuto() {
-    stopAuto();
-    const sec = Math.max(2, Number($("refreshSec").value || 10));
-    timer = setInterval(refreshOnce, sec * 1000);
-    $("btnToggle").textContent = "หยุด auto";
-  }
+  <!-- Chart.js time scale adapter -->
+  <script src="https://cdn.jsdelivr.net/npm/date-fns@3.6.0"></script>
+  <script src="https://cdn.jsdelivr.net/npm/chartjs-adapter-date-fns@3.0.0"></script>
 
-  function stopAuto() {
-    if (timer) clearInterval(timer);
-    timer = null;
-    $("btnToggle").textContent = "เริ่ม auto";
-  }
+  <script>
+    // ===== Theme toggle (SCADA) =====
+    const themeBtn = document.getElementById("themeBtn");
 
-  $("btnLoad").addEventListener("click", async () => {
-    await refreshOnce();
-  });
+    function applyTheme(theme) {
+      document.documentElement.setAttribute("data-theme", theme);
+      themeBtn.textContent = theme === "dark" ? "☀️ Light" : "🌙 Dark";
+      localStorage.setItem("theme", theme);
+      setChartTheme(); // ✅ update chart colors
+    }
 
-  $("btnToggle").addEventListener("click", () => {
-    if (timer) stopAuto();
-    else startAuto();
-  });
+    const savedTheme = localStorage.getItem("theme") || "dark"; // default ให้เข้ม ๆ
+    applyTheme(savedTheme);
 
-  // โหลดครั้งแรก + เริ่ม auto
-  refreshOnce().then(startAuto);
-</script>
+    themeBtn.addEventListener("click", () => {
+      const current = document.documentElement.getAttribute("data-theme");
+      applyTheme(current === "dark" ? "light" : "dark");
+    });
+
+    // ===== Data refresh =====
+    async function refreshOnce() {
+      const deviceId = $("deviceId").value.trim();
+      const minutes  = Number($("minutes").value || 60);
+      if (!deviceId) return;
+
+      try {
+        await checkHealth();
+        await loadLatest(deviceId);
+
+        const h = await loadHistory(deviceId, minutes);
+        ensureChart(h.labels, h.temp, h.hum);
+
+        $("lastUpdate").textContent = "อัปเดต: " + new Date().toLocaleTimeString();
+        $("note").textContent =
+          `จุดข้อมูล: ${h.count} | ช่วงเวลา: ${fmtLocal(h.firstTs)} → ${fmtLocal(h.lastTs)} | ${h.url}`;
+      } catch (e) {
+        $("note").textContent = "โหลดกราฟไม่สำเร็จ: " + (e?.message || e);
+      }
+    }
+
+    function startAuto() {
+      stopAuto();
+      const sec = Math.max(2, Number($("refreshSec").value || 10));
+      timer = setInterval(refreshOnce, sec * 1000);
+      $("btnToggle").textContent = "หยุด auto";
+    }
+
+    function stopAuto() {
+      if (timer) clearInterval(timer);
+      timer = null;
+      $("btnToggle").textContent = "เริ่ม auto";
+    }
+
+    $("btnLoad").addEventListener("click", async () => {
+      await refreshOnce();
+    });
+
+    $("btnToggle").addEventListener("click", () => {
+      if (timer) stopAuto();
+      else startAuto();
+    });
+
+    refreshOnce().then(startAuto);
+  </script>
 </body>
 </html>
