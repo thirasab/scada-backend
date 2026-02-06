@@ -1,5 +1,3 @@
-// server.js (รวมโค้ดครบ: MQTT -> Neon Postgres -> API + Serve public/index.html)
-
 import 'dotenv/config';
 import Fastify from 'fastify';
 import fastifyStatic from '@fastify/static';
@@ -8,64 +6,45 @@ import { fileURLToPath } from 'url';
 import mqtt from 'mqtt';
 import pg from 'pg';
 
-/* =========================
-   Environment
-   ========================= */
 const DATABASE_URL = process.env.DATABASE_URL;
 if (!DATABASE_URL) throw new Error('Missing DATABASE_URL');
 
-// Render จะตั้ง PORT ให้เอง
 const HTTP_PORT = Number(process.env.PORT || 3000);
-
 const DEVICE_ID_DEFAULT = process.env.DEVICE_ID_DEFAULT || 'default';
 
-// Retention / Cleanup
 const RETENTION_DAYS = Number(process.env.RETENTION_DAYS || 30);
 const CLEANUP_EVERY_MINUTES = Number(process.env.CLEANUP_EVERY_MINUTES || 360);
 
-// MQTT
-const MQTT_ENABLED = process.env.MQTT_ENABLED !== 'false'; // default true
+const MQTT_ENABLED = process.env.MQTT_ENABLED !== 'false';
 const MQTT_HOST = process.env.MQTT_HOST;
 const MQTT_PORT = Number(process.env.MQTT_PORT || 8883);
 const MQTT_USERNAME = process.env.MQTT_USERNAME;
 const MQTT_PASSWORD = process.env.MQTT_PASSWORD;
 const MQTT_TELE_TOPIC = process.env.MQTT_TELE_TOPIC;
-const MQTT_STAT_TOPIC = process.env.MQTT_STAT_TOPIC; // optional
+const MQTT_STAT_TOPIC = process.env.MQTT_STAT_TOPIC;
 
-/* =========================
-   DB (Neon Postgres)
-   ========================= */
 const { Pool } = pg;
-
 const pool = new Pool({
   connectionString: DATABASE_URL,
   ssl: { rejectUnauthorized: false },
   max: 5,
 });
 
-/* =========================
-   Fastify
-   ========================= */
 const fastify = Fastify({ logger: true });
 
-// ทำให้หา path ได้แน่นอนสำหรับ ESM
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
-// ✅ Serve static files จากโฟลเดอร์ public/
 fastify.register(fastifyStatic, {
   root: path.join(__dirname, 'public'),
-  prefix: '/', // /index.html, /assets/... ฯลฯ
+  prefix: '/',
 });
 
-function nowIso() {
-  return new Date().toISOString();
-}
+function nowIso() { return new Date().toISOString(); }
 
-// เดา device_id จาก topic แบบง่าย ๆ
 function guessDeviceIdFromTopic(topic) {
   const parts = String(topic || '').split('/').filter(Boolean);
-  if (parts.length >= 2) return parts[parts.length - 2]; // cp/test/dht22-01/telemetry => dht22-01
+  if (parts.length >= 2) return parts[parts.length - 2];
   return DEVICE_ID_DEFAULT;
 }
 
@@ -79,16 +58,13 @@ function parseTelemetry(payloadText) {
     const temp_c = Number.isFinite(Number(tempRaw)) ? Number(tempRaw) : null;
     const hum_pct = Number.isFinite(Number(humRaw)) ? Number(humRaw) : null;
 
-    // ts รองรับ epoch sec/ms; ไม่มีก็ใช้ now
     let ts = new Date();
     if (j.ts != null) {
       const n = Number(j.ts);
       if (Number.isFinite(n)) ts = new Date(n < 1e12 ? n * 1000 : n);
     }
 
-    // device_id ถ้ามาใน payload ใช้เลย ไม่งั้นเดาจาก topic
-    const device_id =
-      (j.device_id && String(j.device_id).trim()) ? String(j.device_id).trim() : null;
+    const device_id = (j.device_id && String(j.device_id).trim()) ? String(j.device_id).trim() : null;
 
     return { ok: true, ts, temp_c, hum_pct, device_id, raw: j };
   } catch {
@@ -104,9 +80,6 @@ async function insertTelemetry({ ts, device_id, temp_c, hum_pct, topic, raw_json
   await pool.query(q, [ts, device_id, temp_c, hum_pct, topic, raw_json]);
 }
 
-/* =========================
-   ✅ Cleanup / Retention
-   ========================= */
 async function cleanupOldData() {
   const days = Math.max(1, Math.min(3650, Number.isFinite(RETENTION_DAYS) ? RETENTION_DAYS : 30));
   const q = `
@@ -118,33 +91,16 @@ async function cleanupOldData() {
 }
 
 function scheduleCleanup() {
-  const everyMin = Math.max(
-    5,
-    Math.min(24 * 60, Number.isFinite(CLEANUP_EVERY_MINUTES) ? CLEANUP_EVERY_MINUTES : 360)
-  );
+  const everyMin = Math.max(5, Math.min(24 * 60, Number.isFinite(CLEANUP_EVERY_MINUTES) ? CLEANUP_EVERY_MINUTES : 360));
 
   cleanupOldData().catch((e) => fastify.log.error(e, 'Cleanup failed'));
-  setInterval(() => {
-    cleanupOldData().catch((e) => fastify.log.error(e, 'Cleanup failed'));
-  }, everyMin * 60 * 1000);
+  setInterval(() => cleanupOldData().catch((e) => fastify.log.error(e, 'Cleanup failed')), everyMin * 60 * 1000);
 
-  fastify.log.info(
-    { every_minutes: everyMin, retention_days: Number.isFinite(RETENTION_DAYS) ? RETENTION_DAYS : 30 },
-    'Cleanup scheduler started'
-  );
+  fastify.log.info({ every_minutes: everyMin, retention_days: Number.isFinite(RETENTION_DAYS) ? RETENTION_DAYS : 30 }, 'Cleanup scheduler started');
 }
 
-/* =========================
-   MQTT Client (optional)
-   ========================= */
 let mqttClient = null;
-
-const lastStatus = {
-  mqtt: 'disabled',
-  lastMessageAt: null,
-  lastError: null,
-  inserted: 0,
-};
+const lastStatus = { mqtt: 'disabled', lastMessageAt: null, lastError: null, inserted: 0 };
 
 function startMqttIfConfigured() {
   if (!MQTT_ENABLED) {
@@ -182,8 +138,8 @@ function startMqttIfConfigured() {
   mqttClient.on('connect', () => {
     lastStatus.mqtt = 'connected';
     lastStatus.lastError = null;
-    fastify.log.info(`MQTT connected: ${mqttUrl}`);
 
+    fastify.log.info(`MQTT connected: ${mqttUrl}`);
     mqttClient.subscribe(MQTT_TELE_TOPIC, { qos: 1 }, (err) => {
       if (err) fastify.log.error(err, 'Subscribe telemetry failed');
       else fastify.log.info(`Subscribed telemetry: ${MQTT_TELE_TOPIC}`);
@@ -224,14 +180,7 @@ function startMqttIfConfigured() {
     const device_id = parsed.device_id || guessDeviceIdFromTopic(topic);
 
     try {
-      await insertTelemetry({
-        ts: parsed.ts,
-        device_id,
-        temp_c: parsed.temp_c,
-        hum_pct: parsed.hum_pct,
-        topic,
-        raw_json: parsed.raw,
-      });
+      await insertTelemetry({ ts: parsed.ts, device_id, temp_c: parsed.temp_c, hum_pct: parsed.hum_pct, topic, raw_json: parsed.raw });
       lastStatus.inserted++;
     } catch (err) {
       lastStatus.lastError = err?.message || String(err);
@@ -240,16 +189,8 @@ function startMqttIfConfigured() {
   });
 }
 
-/* =========================
-   HTTP Routes
-   ========================= */
+fastify.get('/', async (req, reply) => reply.sendFile('index.html'));
 
-// ✅ หน้า Dashboard (public/index.html)
-fastify.get('/', async (req, reply) => {
-  return reply.sendFile('index.html');
-});
-
-// (ถ้าอยากดู JSON เดิม ย้ายไป /info)
 fastify.get('/info', async () => ({ ok: true, service: 'scada-backend', time: nowIso() }));
 
 fastify.get('/health', async () => {
@@ -278,30 +219,21 @@ fastify.get('/api/latest', async (req) => {
   return r.rows[0] || null;
 });
 
-// 🔹 ดูข้อมูลตามช่วงเวลา
-fastify.get('/api/range', async (req) => {
+fastify.get('/api/history', async (req) => {
   const device_id = req.query?.device_id || DEVICE_ID_DEFAULT;
-  const from = req.query?.from;
-  const to   = req.query?.to;
-
-  if (!from || !to) {
-    return { error: "missing from / to" };
-  }
+  const minutes = Math.max(1, Math.min(24 * 60, Number(req.query?.minutes || 60)));
 
   const q = `
     SELECT ts, temp_c, hum_pct
     FROM telemetry_raw
     WHERE device_id = $1
-      AND ts BETWEEN $2::timestamptz AND $3::timestamptz
+      AND ts >= now() - ($2::text || ' minutes')::interval
     ORDER BY ts ASC
   `;
-  const r = await pool.query(q, [device_id, from, to]);
+  const r = await pool.query(q, [device_id, String(minutes)]);
   return r.rows;
 });
 
-/* =========================
-   Start
-   ========================= */
 async function start() {
   await pool.query('SELECT now()');
   fastify.log.info('DB connected OK');
@@ -318,9 +250,6 @@ start().catch((err) => {
   process.exit(1);
 });
 
-/* =========================
-   Graceful shutdown
-   ========================= */
 async function shutdown() {
   try {
     if (mqttClient) mqttClient.end(true);
