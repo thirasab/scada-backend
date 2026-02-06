@@ -58,7 +58,13 @@
 
 <body>
   <div class="wrap">
-   
+    <div class="title">
+      <h1>SCADA Dashboard</h1>
+      <div class="muted">
+        <span id="healthDot" class="statusDot"></span>
+        <span id="healthText">checking…</span>
+      </div>
+    </div>
 
     <div class="row">
       <div class="card">
@@ -120,7 +126,7 @@
   async function checkHealth() {
     // ใช้ /healt ตามของคุณ (สะกดแบบนั้น)
     // ถ้าโปรเจกต์คุณใช้ /health ให้เปลี่ยนบรรทัดนี้เป็น "/health"
-    const url = "/health";
+    const url = "/healt";
     try {
       const res = await fetch(url, { cache: "no-store" });
       const ok = res.ok;
