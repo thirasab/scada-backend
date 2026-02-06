@@ -5,296 +5,248 @@
   <meta name="viewport" content="width=device-width,initial-scale=1" />
   <title>SCADA Dashboard</title>
 
+  <!-- Chart.js -->
   <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
+  <!-- Time adapter -->
+  <script src="https://cdn.jsdelivr.net/npm/date-fns@3.6.0"></script>
+  <script src="https://cdn.jsdelivr.net/npm/chartjs-adapter-date-fns@3.0.0"></script>
 
   <style>
     :root { color-scheme: light dark; }
-    body { font-family: system-ui, -apple-system, Segoe UI, Roboto, Arial, sans-serif; margin: 0; padding: 16px; }
-    .wrap { max-width: 1100px; margin: 0 auto; }
-    .row { display: flex; gap: 12px; flex-wrap: wrap; }
-    .card {
-      border: 1px solid rgba(127,127,127,.25);
-      border-radius: 12px;
-      padding: 12px 14px;
-      flex: 1 1 260px;
-      min-width: 260px;
-      background: rgba(127,127,127,.06);
+
+    :root{
+      --bg:#ffffff; --fg:#111827;
+      --card:rgba(17,24,39,.04);
+      --border:rgba(127,127,127,.25);
+      --btn:rgba(127,127,127,.12);
     }
-    .title { display:flex; align-items:baseline; justify-content:space-between; gap: 10px; }
-    h1 { margin: 0 0 10px 0; font-size: 20px; }
-    .muted { opacity:.75; font-size: 12px; }
-    label { font-size: 12px; opacity:.8; display:block; margin-bottom:6px; }
-    input, select {
-      width: 100%;
-      padding: 10px 10px;
-      border-radius: 10px;
-      border: 1px solid rgba(127,127,127,.35);
-      background: transparent;
-      color: inherit;
-      outline: none;
+    :root[data-theme="dark"]{
+      --bg:#0b1220; --fg:#e5e7eb;
+      --card:rgba(255,255,255,.06);
+      --border:rgba(255,255,255,.18);
+      --btn:rgba(255,255,255,.10);
     }
-    button {
-      padding: 10px 12px;
-      border-radius: 10px;
-      border: 1px solid rgba(127,127,127,.35);
-      background: rgba(127,127,127,.12);
-      color: inherit;
-      cursor: pointer;
+
+    body{
+      font-family:system-ui,-apple-system,Segoe UI,Roboto,Arial,sans-serif;
+      margin:0;padding:16px;
+      background:var(--bg);color:var(--fg);
     }
-    button:hover { filter: brightness(1.05); }
-    .kpi { font-size: 26px; font-weight: 700; line-height: 1.1; margin-top: 6px; }
-    .kpi small { font-size: 14px; font-weight: 600; opacity:.85; }
-    .grid2 { display:grid; grid-template-columns: 1fr 1fr; gap: 12px; }
-    @media (max-width: 720px) { .grid2 { grid-template-columns: 1fr; } }
-    .chartCard { padding: 12px 14px; border-radius: 12px; border: 1px solid rgba(127,127,127,.25); background: rgba(127,127,127,.04); }
-    canvas { width: 100% !important; height: 420px !important; }
-    .statusDot { display:inline-block; width:10px; height:10px; border-radius:50%; margin-right:6px; background:#999; vertical-align:middle;}
-    .ok { background: #22c55e; }
-    .bad { background: #ef4444; }
-    .warn { background: #f59e0b; }
-    .mono { font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace; }
+
+    .wrap{max-width:1100px;margin:0 auto}
+    .title{display:flex;justify-content:space-between;align-items:center}
+    h1{margin:0;font-size:20px}
+
+    .row{display:flex;gap:12px;flex-wrap:wrap;margin-top:12px}
+    .card,.chartCard{
+      border:1px solid var(--border);
+      border-radius:12px;
+      padding:12px 14px;
+      background:var(--card);
+      flex:1 1 260px;
+      min-width:260px;
+    }
+
+    label{font-size:12px;opacity:.8}
+    input,select,button{
+      width:100%;padding:10px;
+      border-radius:10px;
+      border:1px solid rgba(127,127,127,.35);
+      background:transparent;color:inherit;
+    }
+    button{cursor:pointer;background:var(--btn)}
+    button:hover{filter:brightness(1.05)}
+
+    .grid2{display:grid;grid-template-columns:1fr 1fr;gap:12px}
+    @media(max-width:720px){.grid2{grid-template-columns:1fr}}
+
+    .kpi{font-size:26px;font-weight:700}
+    .kpi small{font-size:14px;opacity:.8}
+
+    canvas{width:100%!important;height:420px!important}
+
+    .muted{opacity:.7;font-size:12px}
+    .statusDot{width:10px;height:10px;border-radius:50%;display:inline-block;margin-right:6px;background:#999}
+    .ok{background:#22c55e}
+    .bad{background:#ef4444}
   </style>
 </head>
 
 <body>
-  <div class="wrap">
-    <div class="title">
-      <h1>SCADA Dashboard</h1>
+<div class="wrap">
+
+  <div class="title">
+    <h1>SCADA Dashboard</h1>
+    <div style="display:flex;gap:10px;align-items:center">
+      <button id="themeBtn">🌙 Dark</button>
       <div class="muted">
         <span id="healthDot" class="statusDot"></span>
         <span id="healthText">checking…</span>
       </div>
     </div>
+  </div>
 
-    <div class="row">
-      <div class="card">
-        <label>device_id</label>
-        <input id="deviceId" value="dht22-01" placeholder="เช่น dht22-01" />
-        <div class="muted" style="margin-top:8px">
-          เรียก: <span class="mono">/api/history?device_id=…&minutes=…</span>
+  <div class="row">
+    <div class="card">
+      <label>device_id</label>
+      <input id="deviceId" value="dht22-01">
+    </div>
+
+    <div class="card">
+      <div class="grid2">
+        <div>
+          <label>โหมดกราฟ</label>
+          <select id="mode">
+            <option value="minutes">ย้อนหลังเป็นนาที</option>
+            <option value="range">เลือกวัน–เวลา</option>
+          </select>
+        </div>
+        <div>
+          <label>refresh (วินาที)</label>
+          <input id="refreshSec" type="number" value="10" min="2">
         </div>
       </div>
 
-      <div class="card">
-        <div class="grid2">
-          <div>
-            <label>ย้อนหลัง (minutes)</label>
-            <input id="minutes" type="number" value="180" min="1" step="1" />
-          </div>
-          <div>
-            <label>รีเฟรชทุก (วินาที)</label>
-            <input id="refreshSec" type="number" value="10" min="2" step="1" />
-          </div>
+      <div class="grid2" style="margin-top:10px">
+        <div id="minutesBox">
+          <label>minutes</label>
+          <input id="minutes" type="number" value="180">
         </div>
-
-        <div style="display:flex; gap:10px; margin-top:12px; align-items:center;">
-          <button id="btnLoad">โหลด/รีเฟรช</button>
-          <button id="btnToggle">หยุด auto</button>
-          <div class="muted" id="lastUpdate">—</div>
+        <div id="rangeBox" style="display:none">
+          <label>From</label>
+          <input id="fromDT" type="datetime-local">
+          <label style="margin-top:6px">To</label>
+          <input id="toDT" type="datetime-local">
         </div>
       </div>
 
-      <div class="card">
-        <div class="muted">ค่าล่าสุด</div>
-        <div class="kpi" id="latestTemp">— <small>°C</small></div>
-        <div class="kpi" id="latestHum">— <small>%</small></div>
-        <div class="muted" id="latestTs">—</div>
+      <div style="display:flex;gap:10px;margin-top:10px;flex-wrap:wrap">
+        <button id="btnLoad">โหลด</button>
+        <button id="btnToggle">หยุด auto</button>
+        <div class="muted" id="lastUpdate">—</div>
       </div>
     </div>
 
-    <div style="height:12px"></div>
-
-    <div class="chartCard">
-      <canvas id="chart"></canvas>
-      <div class="muted" id="note" style="margin-top:10px">—</div>
+    <div class="card">
+      <div class="muted">ค่าล่าสุด</div>
+      <div class="kpi" id="latestTemp">— <small>°C</small></div>
+      <div class="kpi" id="latestHum">— <small>%</small></div>
+      <div class="muted" id="latestTs">—</div>
     </div>
   </div>
 
+  <div style="margin-top:12px" class="chartCard">
+    <canvas id="chart"></canvas>
+    <div class="muted" id="note">—</div>
+  </div>
+
+</div>
+
 <script>
-  const $ = (id) => document.getElementById(id);
+const $=id=>document.getElementById(id);
+let chart,timer;
 
-  let timer = null;
-  let chart = null;
+function setTheme(t){
+  document.documentElement.setAttribute("data-theme",t);
+  localStorage.setItem("theme",t);
+  $("themeBtn").textContent=t==="dark"?"☀️ Light":"🌙 Dark";
+}
+setTheme(localStorage.getItem("theme")||
+  (matchMedia("(prefers-color-scheme:dark)").matches?"dark":"light")
+);
+$("themeBtn").onclick=()=>setTheme(
+  document.documentElement.getAttribute("data-theme")==="dark"?"light":"dark"
+);
 
-  function fmtLocal(iso) {
-    if (!iso) return "—";
-    const d = new Date(iso);
-    // แสดงแบบ locale ของ browser
-    return d.toLocaleString();
+async function checkHealth(){
+  try{
+    const r=await fetch("/health");
+    $("healthDot").className="statusDot "+(r.ok?"ok":"bad");
+    $("healthText").textContent=r.ok?"backend ok":"error";
+  }catch{
+    $("healthDot").className="statusDot bad";
+    $("healthText").textContent="offline";
+  }
+}
+
+async function loadLatest(id){
+  const r=await fetch(`/api/latest?device_id=${id}`);
+  const x=await r.json();
+  if(!x)return;
+  $("latestTemp").innerHTML=`${(+x.temp_c).toFixed(2)} <small>°C</small>`;
+  $("latestHum").innerHTML=`${(+x.hum_pct).toFixed(2)} <small>%</small>`;
+  $("latestTs").textContent=new Date(x.ts).toLocaleString();
+}
+
+async function loadSeries(id){
+  if($("mode").value==="minutes"){
+    const r=await fetch(`/api/history?device_id=${id}&minutes=${$("minutes").value}`);
+    return r.json();
+  }
+  const from=new Date($("fromDT").value).toISOString();
+  const to=new Date($("toDT").value).toISOString();
+  const r=await fetch(`/api/range?device_id=${id}&from=${from}&to=${to}`);
+  return r.json();
+}
+
+function draw(arr){
+  const labels=arr.map(r=>new Date(r.ts));
+  const t=arr.map(r=>r.temp_c);
+  const h=arr.map(r=>r.hum_pct);
+
+  if(chart){
+    chart.data.labels=labels;
+    chart.data.datasets[0].data=t;
+    chart.data.datasets[1].data=h;
+    return chart.update();
   }
 
-  async function checkHealth() {
-    // ใช้ /healt ตามของคุณ (สะกดแบบนั้น)
-    // ถ้าโปรเจกต์คุณใช้ /health ให้เปลี่ยนบรรทัดนี้เป็น "/health"
-    const url = "/health";
-    try {
-      const res = await fetch(url, { cache: "no-store" });
-      const ok = res.ok;
-      $("healthDot").className = "statusDot " + (ok ? "ok" : "bad");
-      $("healthText").textContent = ok ? "backend ok" : ("backend error (" + res.status + ")");
-    } catch (e) {
-      $("healthDot").className = "statusDot bad";
-      $("healthText").textContent = "backend offline";
-    }
-  }
-
-  async function loadLatest(deviceId) {
-    try {
-      const res = await fetch(`/api/latest?device_id=${encodeURIComponent(deviceId)}`, { cache: "no-store" });
-      if (!res.ok) throw new Error("latest status " + res.status);
-      const x = await res.json();
-      if (!x) return;
-
-      $("latestTemp").innerHTML = `${Number(x.temp_c ?? NaN).toFixed(2)} <small>°C</small>`;
-      $("latestHum").innerHTML  = `${Number(x.hum_pct ?? NaN).toFixed(2)} <small>%</small>`;
-      $("latestTs").textContent = `เวลา: ${fmtLocal(x.ts)} | topic: ${x.topic ?? "-"}`;
-    } catch (e) {
-      // ไม่ทำให้ทั้งหน้าแตก
-      $("latestTs").textContent = "โหลด latest ไม่ได้";
-    }
-  }
-
-  async function loadHistory(deviceId, minutes) {
-    const url = `/api/history?device_id=${encodeURIComponent(deviceId)}&minutes=${encodeURIComponent(minutes)}`;
-    const res = await fetch(url, { cache: "no-store" });
-    if (!res.ok) throw new Error("history status " + res.status);
-    const arr = await res.json();
-    if (!Array.isArray(arr)) throw new Error("history not array");
-
-    // เรียงตามเวลา (กันกรณี DB คืนมาไม่เรียง)
-    arr.sort((a,b) => new Date(a.ts) - new Date(b.ts));
-
-    const labels = arr.map(r => new Date(r.ts));
-    const temp = arr.map(r => Number(r.temp_c));
-    const hum  = arr.map(r => Number(r.hum_pct));
-
-    return { labels, temp, hum, count: arr.length, firstTs: arr[0]?.ts, lastTs: arr[arr.length - 1]?.ts, url };
-  }
-
-  function ensureChart(labels, temp, hum) {
-    const ctx = $("chart").getContext("2d");
-
-    if (chart) {
-      chart.data.labels = labels;
-      chart.data.datasets[0].data = temp;
-      chart.data.datasets[1].data = hum;
-      chart.update();
-      return;
-    }
-
-    chart = new Chart(ctx, {
-      type: "line",
-      data: {
-        labels,
-        datasets: [
-          {
-            label: "Temperature (°C)",
-            data: temp,
-            borderWidth: 2,
-            pointRadius: 0,
-            tension: 0.25,
-            yAxisID: "yTemp",
-          },
-          {
-            label: "Humidity (%)",
-            data: hum,
-            borderWidth: 2,
-            pointRadius: 0,
-            tension: 0.25,
-            yAxisID: "yHum",
-          }
-        ]
-      },
-      options: {
-        responsive: true,
-        maintainAspectRatio: false,
-        interaction: { mode: "index", intersect: false },
-        plugins: {
-          legend: { position: "top" },
-          tooltip: {
-            callbacks: {
-              title: (items) => {
-                const d = items?.[0]?.label;
-                return d ? new Date(d).toLocaleString() : "";
-              }
-            }
-          }
-        },
-        scales: {
-          x: {
-            type: "time",
-            time: { unit: "minute" }
-          },
-          yTemp: {
-            type: "linear",
-            position: "left",
-            title: { display: true, text: "°C" }
-          },
-          yHum: {
-            type: "linear",
-            position: "right",
-            title: { display: true, text: "%" },
-            grid: { drawOnChartArea: false }
-          }
-        }
+  chart=new Chart($("chart"),{
+    type:"line",
+    data:{
+      labels,
+      datasets:[
+        {label:"Temp °C",data:t,yAxisID:"y1"},
+        {label:"Hum %",data:h,yAxisID:"y2"}
+      ]
+    },
+    options:{
+      interaction:{mode:"index",intersect:false},
+      scales:{
+        x:{type:"time"},
+        y1:{position:"left"},
+        y2:{position:"right",grid:{drawOnChartArea:false}}
       }
-    });
-  }
-
-  // Chart.js time scale ต้องมี adapter (ใน v4 แนะนำใช้ date adapter)
-  // วิธีง่ายสุด: ใช้ "chartjs-adapter-date-fns"
-</script>
-
-<!-- เพิ่ม date adapter สำหรับ time scale -->
-<script src="https://cdn.jsdelivr.net/npm/date-fns@3.6.0"></script>
-<script src="https://cdn.jsdelivr.net/npm/chartjs-adapter-date-fns@3.0.0"></script>
-
-<script>
-  async function refreshOnce() {
-    const deviceId = $("deviceId").value.trim();
-    const minutes  = Number($("minutes").value || 60);
-
-    if (!deviceId) return;
-
-    try {
-      await checkHealth();
-      await loadLatest(deviceId);
-
-      const h = await loadHistory(deviceId, minutes);
-      ensureChart(h.labels, h.temp, h.hum);
-
-      $("lastUpdate").textContent = "อัปเดต: " + new Date().toLocaleTimeString();
-      $("note").textContent =
-        `จุดข้อมูล: ${h.count} | ช่วงเวลา: ${fmtLocal(h.firstTs)} → ${fmtLocal(h.lastTs)} | ${h.url}`;
-    } catch (e) {
-      $("note").textContent = "โหลดกราฟไม่สำเร็จ: " + (e?.message || e);
     }
-  }
-
-  function startAuto() {
-    stopAuto();
-    const sec = Math.max(2, Number($("refreshSec").value || 10));
-    timer = setInterval(refreshOnce, sec * 1000);
-    $("btnToggle").textContent = "หยุด auto";
-  }
-
-  function stopAuto() {
-    if (timer) clearInterval(timer);
-    timer = null;
-    $("btnToggle").textContent = "เริ่ม auto";
-  }
-
-  $("btnLoad").addEventListener("click", async () => {
-    await refreshOnce();
   });
+}
 
-  $("btnToggle").addEventListener("click", () => {
-    if (timer) stopAuto();
-    else startAuto();
-  });
+async function refresh(){
+  const id=$("deviceId").value;
+  await checkHealth();
+  await loadLatest(id);
+  const arr=await loadSeries(id);
+  draw(arr);
+  $("lastUpdate").textContent=new Date().toLocaleTimeString();
+  $("note").textContent=`points: ${arr.length}`;
+}
 
-  // โหลดครั้งแรก + เริ่ม auto
-  refreshOnce().then(startAuto);
+$("mode").onchange=()=>{
+  $("minutesBox").style.display=$("mode").value==="minutes"?"":"none";
+  $("rangeBox").style.display=$("mode").value==="range"?"":"none";
+};
+
+$("btnLoad").onclick=refresh;
+$("btnToggle").onclick=()=>{
+  if(timer){clearInterval(timer);timer=null;$("btnToggle").textContent="เริ่ม auto";}
+  else{timer=setInterval(refresh,$("refreshSec").value*1000);$("btnToggle").textContent="หยุด auto";}
+};
+
+const now=new Date();
+$("toDT").value=now.toISOString().slice(0,16);
+$("fromDT").value=new Date(now-3*3600000).toISOString().slice(0,16);
+
+refresh().then(()=>timer=setInterval(refresh,$("refreshSec").value*1000));
 </script>
 </body>
 </html>

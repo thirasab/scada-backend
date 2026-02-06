@@ -1,4 +1,6 @@
-// server.js (รวมโค้ดครบ: MQTT -> Neon Postgres -> API + Serve public/index.html)
+// server.js (FULL) : Fastify v4 + @fastify/static v6 + MQTT -> Neon Postgres -> API
+// รองรับหน้า Dashboard: /  (public/index.html)
+// API: /health, /info, /api/latest, /api/history, /api/range
 
 import 'dotenv/config';
 import Fastify from 'fastify';
@@ -48,7 +50,7 @@ const pool = new Pool({
    ========================= */
 const fastify = Fastify({ logger: true });
 
-// ทำให้หา path ได้แน่นอนสำหรับ ESM
+// __dirname สำหรับ ESM
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
@@ -249,9 +251,10 @@ fastify.get('/', async (req, reply) => {
   return reply.sendFile('index.html');
 });
 
-// (ถ้าอยากดู JSON เดิม ย้ายไป /info)
+// JSON info
 fastify.get('/info', async () => ({ ok: true, service: 'scada-backend', time: nowIso() }));
 
+// Health
 fastify.get('/health', async () => {
   const r = await pool.query('SELECT 1 as ok');
   return {
@@ -265,6 +268,7 @@ fastify.get('/health', async () => {
   };
 });
 
+// Latest by device
 fastify.get('/api/latest', async (req) => {
   const device_id = req.query?.device_id || DEVICE_ID_DEFAULT;
   const q = `
@@ -278,6 +282,7 @@ fastify.get('/api/latest', async (req) => {
   return r.rows[0] || null;
 });
 
+// History by minutes
 fastify.get('/api/history', async (req) => {
   const device_id = req.query?.device_id || DEVICE_ID_DEFAULT;
   const minutes = Math.max(1, Math.min(24 * 60, Number(req.query?.minutes || 60)));
@@ -290,6 +295,47 @@ fastify.get('/api/history', async (req) => {
     ORDER BY ts ASC
   `;
   const r = await pool.query(q, [device_id, String(minutes)]);
+  return r.rows;
+});
+
+// ✅ Range by from/to (ISO datetime)  [max 7 days]
+fastify.get('/api/range', async (req, reply) => {
+  const device_id = req.query?.device_id || DEVICE_ID_DEFAULT;
+
+  const from = req.query?.from;
+  const to = req.query?.to;
+
+  const fromDate = from ? new Date(from) : null;
+  const toDate = to ? new Date(to) : null;
+
+  if (!fromDate || Number.isNaN(fromDate.getTime())) {
+    reply.code(400);
+    return { ok: false, error: "Invalid 'from' (ISO datetime required)" };
+  }
+  if (!toDate || Number.isNaN(toDate.getTime())) {
+    reply.code(400);
+    return { ok: false, error: "Invalid 'to' (ISO datetime required)" };
+  }
+  if (toDate <= fromDate) {
+    reply.code(400);
+    return { ok: false, error: "'to' must be after 'from'" };
+  }
+
+  const maxMs = 7 * 24 * 60 * 60 * 1000;
+  if (toDate.getTime() - fromDate.getTime() > maxMs) {
+    reply.code(400);
+    return { ok: false, error: "Range too large (max 7 days)" };
+  }
+
+  const q = `
+    SELECT ts, temp_c, hum_pct
+    FROM telemetry_raw
+    WHERE device_id = $1
+      AND ts >= $2
+      AND ts <= $3
+    ORDER BY ts ASC
+  `;
+  const r = await pool.query(q, [device_id, fromDate.toISOString(), toDate.toISOString()]);
   return r.rows;
 });
 
