@@ -44,7 +44,7 @@
 
     .muted { opacity: 1; font-size: 12px; }
 
-    /* ===== Cards layout (desktop default) ===== */
+    /* ===== Cards layout ===== */
     .row {
       display:flex;
       gap: 12px;
@@ -113,7 +113,6 @@
     canvas { width: 100% !important; height: 420px !important; max-width: 100% !important; }
 
     .statusDot { display:inline-block; width:10px; height:10px; border-radius:50%; margin-right:6px; background:#999; vertical-align:middle;}
-
     .mono { font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace; }
 
     /* ===== Quick device chips ===== */
@@ -131,6 +130,35 @@
       background: rgba(0,0,0,.08);
       font-weight: 800;
       letter-spacing: .2px;
+    }
+
+    /* ===== Debug panel ===== */
+    .debugWrap{
+      margin-top: 12px;
+      padding: 12px 14px;
+      border-radius: 14px;
+      border: 1px solid rgba(127,127,127,.25);
+      background: rgba(127,127,127,.04);
+    }
+    .debugHeader{
+      display:flex;
+      gap:10px;
+      align-items:center;
+      justify-content:space-between;
+      flex-wrap: wrap;
+    }
+    .debugBox{
+      margin-top: 10px;
+      padding: 10px;
+      border-radius: 12px;
+      border: 1px solid rgba(127,127,127,.25);
+      background: rgba(0,0,0,.08);
+      max-height: 220px;
+      overflow: auto;
+      white-space: pre-wrap;
+      font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+      font-size: 12px;
+      line-height: 1.35;
     }
 
     /* =========================
@@ -181,7 +209,7 @@
 
     .muted{ color: var(--muted2); }
 
-    .card, .chartCard{
+    .card, .chartCard, .debugWrap{
       background: linear-gradient(180deg, var(--panel), var(--panel2));
       border: 1px solid var(--stroke);
       box-shadow: var(--shadow);
@@ -251,7 +279,7 @@
         gap: 10px;
       }
 
-      .card, .chartCard{
+      .card, .chartCard, .debugWrap{
         border-radius: var(--radius);
         padding: 14px;
       }
@@ -308,7 +336,6 @@
           เรียก: <span class="mono">/api/history?device_id=…&minutes=…</span>
         </div>
 
-        <!-- Quick device buttons (edit names to match your devices) -->
         <div class="quick">
           <button class="chip" data-dev="dht22-01">dht22-01</button>
           <button class="chip" data-dev="dht22-02">dht22-02</button>
@@ -324,7 +351,8 @@
           </div>
           <div>
             <label>รีเฟรชทุก (วินาที)</label>
-            <input id="refreshSec" type="number" value="10" min="2" step="1" />
+            <!-- กันค่าน้อยเกินจนหน้าแฮงค์ -->
+            <input id="refreshSec" type="number" value="10" min="5" step="1" />
           </div>
         </div>
 
@@ -347,6 +375,18 @@
       <canvas id="chart"></canvas>
       <div class="muted" id="note" style="margin-top:10px">—</div>
     </div>
+
+    <!-- DEBUG PANEL (ดู log ได้บนมือถือ) -->
+    <div class="debugWrap">
+      <div class="debugHeader">
+        <div class="muted"><b>DEBUG</b> (ถ้าหน้าค้าง ดู log ที่นี่)</div>
+        <div style="display:flex; gap:10px; align-items:center; flex-wrap:wrap;">
+          <button id="btnCopyLog">Copy Log</button>
+          <button id="btnClearLog">Clear</button>
+        </div>
+      </div>
+      <div id="debugBox" class="debugBox">ready…</div>
+    </div>
   </div>
 
   <!-- Chart.js time adapter -->
@@ -356,8 +396,53 @@
   <script>
     const $ = (id) => document.getElementById(id);
 
+    // ===== Debug logger (console + on-page) =====
+    const debugBox = $("debugBox");
+    const logs = [];
+    function dlog(...args) {
+      console.log(...args);
+      const line = args.map(a => {
+        try { return typeof a === "string" ? a : JSON.stringify(a); }
+        catch { return String(a); }
+      }).join(" ");
+      const ts = new Date().toLocaleTimeString();
+      logs.push(`[${ts}] ${line}`);
+      if (logs.length > 300) logs.shift();
+      debugBox.textContent = logs.join("\n");
+      debugBox.scrollTop = debugBox.scrollHeight;
+    }
+    function derr(...args) {
+      console.error(...args);
+      dlog("❌", ...args);
+    }
+
+    window.addEventListener("error", (e) => {
+      derr("window.error:", e?.message, e?.filename + ":" + e?.lineno);
+    });
+    window.addEventListener("unhandledrejection", (e) => {
+      derr("unhandledrejection:", e?.reason?.message || e?.reason || e);
+    });
+
+    $("btnClearLog").addEventListener("click", () => {
+      logs.length = 0;
+      debugBox.textContent = "cleared…";
+    });
+
+    $("btnCopyLog").addEventListener("click", async () => {
+      try {
+        await navigator.clipboard.writeText(logs.join("\n"));
+        dlog("📋 copied logs to clipboard");
+      } catch (e) {
+        derr("copy failed:", e?.message || e);
+      }
+    });
+
+    // ===== App state =====
     let timer = null;
     let chart = null;
+
+    // Same origin (คุณเปิดจาก https://scada-backend-pjx9.onrender.com/ อยู่แล้ว)
+    const API_BASE = "";
 
     function fmtLocal(iso) {
       if (!iso) return "—";
@@ -365,48 +450,66 @@
       return d.toLocaleString();
     }
 
-    async function checkHealth() {
-      const url = "/health";
+    async function fetchJson(url) {
+      const full = API_BASE ? (API_BASE + url) : url;
+      dlog("➡️ fetch", full);
+      const t0 = performance.now();
+      const res = await fetch(full, { cache: "no-store" });
+      const ms = Math.round(performance.now() - t0);
+      dlog("⬅️ status", res.status, res.statusText, ms + "ms");
+
+      const text = await res.text();
+      // log body แบบสั้น ๆ กัน spam
+      dlog("⬅️ body", text.length > 200 ? (text.slice(0,200) + "…") : text);
+
+      if (!res.ok) throw new Error(`HTTP ${res.status}: ${text.slice(0,120)}`);
       try {
-        const res = await fetch(url, { cache: "no-store" });
-        const ok = res.ok;
-        $("healthDot").className = "statusDot " + (ok ? "ok" : "bad");
-        $("healthText").textContent = ok ? "backend ok" : ("backend error (" + res.status + ")");
+        return JSON.parse(text);
+      } catch (e) {
+        throw new Error("JSON parse failed: " + (e?.message || e));
+      }
+    }
+
+    async function checkHealth() {
+      try {
+        const x = await fetchJson("/health");
+        $("healthDot").className = "statusDot " + (x?.ok ? "ok" : "bad");
+        $("healthText").textContent = x?.ok ? "backend ok" : "backend error";
+        return x;
       } catch (e) {
         $("healthDot").className = "statusDot bad";
         $("healthText").textContent = "backend offline";
+        throw e;
       }
     }
 
     async function loadLatest(deviceId) {
       try {
-        const res = await fetch(`/api/latest?device_id=${encodeURIComponent(deviceId)}`, { cache: "no-store" });
-        if (!res.ok) throw new Error("latest status " + res.status);
-        const x = await res.json();
-        if (!x) return;
-
+        const x = await fetchJson(`/api/latest?device_id=${encodeURIComponent(deviceId)}`);
+        if (!x) {
+          dlog("latest: null");
+          $("latestTemp").innerHTML = `— <small>°C</small>`;
+          $("latestHum").innerHTML  = `— <small>%</small>`;
+          $("latestTs").textContent = "ไม่มีข้อมูล latest";
+          return;
+        }
         $("latestTemp").innerHTML = `${Number(x.temp_c ?? NaN).toFixed(2)} <small>°C</small>`;
         $("latestHum").innerHTML  = `${Number(x.hum_pct ?? NaN).toFixed(2)} <small>%</small>`;
         $("latestTs").textContent = `เวลา: ${fmtLocal(x.ts)} | topic: ${x.topic ?? "-"}`;
       } catch (e) {
+        derr("loadLatest failed:", e?.message || e);
         $("latestTs").textContent = "โหลด latest ไม่ได้";
       }
     }
 
     async function loadHistory(deviceId, minutes) {
-      const url = `/api/history?device_id=${encodeURIComponent(deviceId)}&minutes=${encodeURIComponent(minutes)}`;
-      const res = await fetch(url, { cache: "no-store" });
-      if (!res.ok) throw new Error("history status " + res.status);
-      const arr = await res.json();
-      if (!Array.isArray(arr)) throw new Error("history not array");
-
-      arr.sort((a,b) => new Date(a.ts) - new Date(b.ts));
-
-      const labels = arr.map(r => new Date(r.ts));
-      const temp = arr.map(r => Number(r.temp_c));
-      const hum  = arr.map(r => Number(r.hum_pct));
-
-      return { labels, temp, hum, count: arr.length, firstTs: arr[0]?.ts, lastTs: arr[arr.length - 1]?.ts, url };
+      const x = await fetchJson(`/api/history?device_id=${encodeURIComponent(deviceId)}&minutes=${encodeURIComponent(minutes)}`);
+      if (!Array.isArray(x)) throw new Error("history is not array");
+      x.sort((a,b) => new Date(a.ts) - new Date(b.ts));
+      const labels = x.map(r => new Date(r.ts));
+      const temp = x.map(r => Number(r.temp_c));
+      const hum  = x.map(r => Number(r.hum_pct));
+      return { labels, temp, hum, count: x.length, firstTs: x[0]?.ts, lastTs: x[x.length-1]?.ts };
     }
 
     function setChartTheme() {
@@ -505,26 +608,32 @@
       const minutes  = Math.max(1, Number($("minutes").value || 60));
       if (!deviceId) return;
 
+      dlog("🔄 refreshOnce", { deviceId, minutes });
+
       try {
-        await checkHealth();
+        const h = await checkHealth();
+        dlog("health:", h);
+
         await loadLatest(deviceId);
 
-        const h = await loadHistory(deviceId, minutes);
-        ensureChart(h.labels, h.temp, h.hum);
+        const his = await loadHistory(deviceId, minutes);
+        dlog("history:", { count: his.count, firstTs: his.firstTs, lastTs: his.lastTs });
+
+        ensureChart(his.labels, his.temp, his.hum);
 
         $("lastUpdate").textContent = "อัปเดต: " + new Date().toLocaleTimeString();
         $("note").textContent =
-          `จุดข้อมูล: ${h.count} | ช่วงเวลา: ${fmtLocal(h.firstTs)} → ${fmtLocal(h.lastTs)} | ${h.url}`;
-      } } catch (e) {
-  console.error(e);
-  $("note").textContent = "ERROR: " + (e?.message || e);
-}
-
+          `จุดข้อมูล: ${his.count} | ช่วงเวลา: ${fmtLocal(his.firstTs)} → ${fmtLocal(his.lastTs)}`;
+      } catch (e) {
+        derr("refreshOnce failed:", e?.message || e);
+        $("note").textContent = "ERROR: " + (e?.message || e);
+      }
     }
 
     function startAuto() {
       stopAuto();
-      const sec = Math.max(2, Number($("refreshSec").value || 10));
+      const sec = Math.max(5, Number($("refreshSec").value || 10)); // กันยิงถี่จนแฮงค์
+      dlog("▶️ startAuto every", sec, "sec");
       timer = setInterval(refreshOnce, sec * 1000);
       $("btnToggle").textContent = "หยุด auto";
     }
@@ -532,12 +641,14 @@
     function stopAuto() {
       if (timer) clearInterval(timer);
       timer = null;
+      dlog("⏸ stopAuto");
       $("btnToggle").textContent = "เริ่ม auto";
     }
 
     // ===== Theme toggle =====
     const themeBtn = $("themeBtn");
     function applyTheme(theme) {
+      dlog("🎨 applyTheme", theme);
       document.documentElement.setAttribute("data-theme", theme);
       themeBtn.textContent = theme === "dark" ? "☀️ Light" : "🌙 Dark";
       localStorage.setItem("theme", theme);
@@ -553,22 +664,34 @@
     // ===== Quick device buttons =====
     document.querySelectorAll(".chip").forEach(btn => {
       btn.addEventListener("click", async () => {
-        $("deviceId").value = btn.dataset.dev;
+        const dev = btn.dataset.dev;
+        dlog("👉 chip click", dev);
+        $("deviceId").value = dev;
         await refreshOnce();
       });
     });
 
-    // ===== Mobile: slower refresh by default (save bandwidth) =====
+    // ===== Mobile: slower refresh by default =====
     if (window.matchMedia("(max-width: 600px)").matches) {
       const r = $("refreshSec");
-      if (r && Number(r.value) < 20) r.value = 20;
+      if (r && Number(r.value) < 20) {
+        r.value = 20;
+        dlog("📱 mobile detected -> set refreshSec=20");
+      }
     }
 
     // ===== Bind buttons =====
-    $("btnLoad").addEventListener("click", async () => { await refreshOnce(); });
-    $("btnToggle").addEventListener("click", () => { timer ? stopAuto() : startAuto(); });
+    $("btnLoad").addEventListener("click", async () => {
+      dlog("🟦 btnLoad click");
+      await refreshOnce();
+    });
+    $("btnToggle").addEventListener("click", () => {
+      dlog("🟨 btnToggle click");
+      timer ? stopAuto() : startAuto();
+    });
 
-    // First load + auto
+    // Start
+    dlog("✅ dashboard boot", { href: location.href, origin: location.origin });
     refreshOnce().then(startAuto);
   </script>
 </body>
