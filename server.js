@@ -278,18 +278,24 @@ fastify.get('/api/latest', async (req) => {
   return r.rows[0] || null;
 });
 
-fastify.get('/api/history', async (req) => {
+// 🔹 ดูข้อมูลตามช่วงเวลา
+fastify.get('/api/range', async (req) => {
   const device_id = req.query?.device_id || DEVICE_ID_DEFAULT;
-  const minutes = Math.max(1, Math.min(24 * 60, Number(req.query?.minutes || 60)));
+  const from = req.query?.from;
+  const to   = req.query?.to;
+
+  if (!from || !to) {
+    return { error: "missing from / to" };
+  }
 
   const q = `
     SELECT ts, temp_c, hum_pct
     FROM telemetry_raw
     WHERE device_id = $1
-      AND ts >= now() - ($2::text || ' minutes')::interval
+      AND ts BETWEEN $2::timestamptz AND $3::timestamptz
     ORDER BY ts ASC
   `;
-  const r = await pool.query(q, [device_id, String(minutes)]);
+  const r = await pool.query(q, [device_id, from, to]);
   return r.rows;
 });
 

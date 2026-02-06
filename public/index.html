@@ -1,470 +1,317 @@
 <!doctype html>
-<html lang="th">
+<html lang="th" data-theme="dark">
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width,initial-scale=1" />
-  <title>SCADA Dashboard</title>
+  <title>Industrial SCADA Dashboard</title>
 
+  <!-- Chart.js -->
   <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
 
   <style>
-    /* =========================
-       ✅ FIX OVERFLOW (สำคัญมาก)
-       ========================= */
+    /* =====================================================
+       GLOBAL + FIX OVERFLOW
+       ===================================================== */
     * { box-sizing: border-box; }
-    html, body { width: 100%; }
-    body { margin: 0; padding: 16px; overflow-x: hidden; }
-
-    .wrap { max-width: 1100px; width: 100%; margin: 0 auto; overflow-x: hidden; }
-
-    .row { display: flex; gap: 12px; flex-wrap: wrap; width: 100%; }
-    /* ✅ min-width:0 = กัน flex item ดันล้นขอบ */
-    .card { min-width: 0 !important; }
-
-    .chartCard { width: 100%; overflow: hidden; }
-    canvas { width: 100% !important; max-width: 100% !important; height: 420px !important; }
-
-    input, select { max-width: 100%; }
-
-    /* =========================
-       Layout base
-       ========================= */
-    body { font-family: system-ui, -apple-system, Segoe UI, Roboto, Arial, sans-serif; }
-    .title { display:flex; align-items:baseline; justify-content:space-between; gap: 10px; }
-
-    h1 { margin: 0 0 10px 0; font-size: 20px; letter-spacing: .6px; }
-    .muted { font-size: 12px; }
-    label { font-size: 12px; display:block; margin-bottom:6px; }
-
-    .card {
-      border-radius: 12px;
-      padding: 12px 14px;
-      flex: 1 1 260px;
-      background: rgba(127,127,127,.06);
-      border: 1px solid rgba(127,127,127,.25);
+    html, body { width:100%; }
+    body {
+      margin:0;
+      padding:16px;
+      overflow-x:hidden;
+      font-family: system-ui, -apple-system, Segoe UI, Roboto, Arial, sans-serif;
     }
 
-    input, select {
-      width: 100%;
-      padding: 10px 10px;
-      border-radius: 10px;
-      border: 1px solid rgba(127,127,127,.35);
-      background: transparent;
-      color: inherit;
-      outline: none;
+    .wrap{
+      max-width:1200px;
+      width:100%;
+      margin:0 auto;
+      overflow-x:hidden;
     }
 
-    button {
-      padding: 10px 12px;
-      border-radius: 10px;
-      border: 1px solid rgba(127,127,127,.35);
-      background: rgba(127,127,127,.12);
-      color: inherit;
-      cursor: pointer;
-      white-space: nowrap;
-    }
-    button:hover { filter: brightness(1.08); }
-
-    .kpi { font-size: 28px; font-weight: 800; line-height: 1.1; margin-top: 6px; }
-    .kpi small { font-size: 14px; font-weight: 700; opacity:.85; }
-
-    .grid2 { display:grid; grid-template-columns: 1fr 1fr; gap: 12px; }
-    @media (max-width: 720px) { .grid2 { grid-template-columns: 1fr; } }
-
-    .chartCard {
-      padding: 12px 14px;
-      border-radius: 12px;
-      border: 1px solid rgba(127,127,127,.25);
-      background: rgba(127,127,127,.04);
+    /* =====================================================
+       RESPONSIVE GRID (แทน flex)
+       ===================================================== */
+    .row{
+      display:grid;
+      grid-template-columns:repeat(12,1fr);
+      gap:12px;
+      width:100%;
     }
 
-    .statusDot { display:inline-block; width:10px; height:10px; border-radius:50%; margin-right:6px; background:#999; vertical-align:middle; }
-    .mono { font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace; }
+    .card{ grid-column: span 4; min-width:0; }
+    .card.control{ grid-column: span 5; }
+    .card.kpi{ grid-column: span 3; }
 
-    /* =========================
-       ✅ Industrial SCADA THEME
-       ========================= */
+    @media(max-width:1100px){
+      .card{ grid-column: span 6; }
+      .card.control{ grid-column: span 6; }
+      .card.kpi{ grid-column: span 12; }
+    }
+
+    @media(max-width:720px){
+      .card{ grid-column: span 12; }
+      body{ padding:12px; }
+    }
+
+    /* =====================================================
+       BASE COMPONENT
+       ===================================================== */
+    h1{ margin:0; font-size:20px; letter-spacing:.6px; }
+    label{ font-size:12px; margin-bottom:6px; display:block; }
+    .muted{ font-size:12px; }
+
+    input{
+      width:100%;
+      padding:10px;
+      border-radius:8px;
+      border:1px solid;
+      background:transparent;
+      color:inherit;
+    }
+
+    button{
+      padding:10px 12px;
+      border-radius:8px;
+      border:1px solid;
+      background:transparent;
+      cursor:pointer;
+      white-space:nowrap;
+    }
+
+    .kpiValue{
+      font-size:28px;
+      font-weight:800;
+      margin-top:6px;
+    }
+
+    .chartCard{
+      margin-top:14px;
+      padding:12px;
+      border-radius:12px;
+      overflow:hidden;
+    }
+
+    canvas{
+      width:100% !important;
+      height:420px !important;
+      max-width:100%;
+    }
+
+    /* =====================================================
+       INDUSTRIAL SCADA THEME
+       ===================================================== */
     :root{
-      color-scheme: light;
-      --bg: #f6f7fb;
-      --panel: rgba(255,255,255,.80);
-      --panel2: rgba(255,255,255,.60);
-      --stroke: rgba(17,24,39,.18);
-      --text: #0b1220;
-      --muted2: rgba(11,18,32,.72);
-
-      --accent: #2563eb;
-      --ok: #16a34a;
-      --warn: #f59e0b;
-      --bad: #dc2626;
-
-      --shadow: 0 8px 28px rgba(0,0,0,.08);
-      --glow: none;
-    }
-
-    [data-theme="dark"]{
-      color-scheme: dark;
-      --bg: #04060a;                   /* almost black */
-      --panel: rgba(10,14,22,.92);     /* deep navy */
-      --panel2: rgba(10,14,22,.70);
-      --stroke: rgba(45,255,178,.22);  /* neon border */
-      --text: #d9ffe9;                 /* pale green */
-      --muted2: rgba(217,255,233,.72);
-
-      --accent: #2dffb2;               /* neon mint */
-      --ok: #2dffb2;
-      --warn: #ffb020;
-      --bad: #ff3b5c;
-
-      --shadow: 0 14px 40px rgba(0,0,0,.58);
-      --glow: 0 0 18px rgba(45,255,178,.18), 0 0 42px rgba(45,255,178,.10);
+      --bg:#04060a;
+      --panel:#0a0e16;
+      --panel2:#0a0e16cc;
+      --border:#2dffb244;
+      --text:#d9ffe9;
+      --muted:#9fdcc6;
+      --accent:#2dffb2;
+      --warn:#ffb020;
+      --shadow:0 14px 40px rgba(0,0,0,.6);
     }
 
     body{
       background:
-        radial-gradient(1200px 700px at 20% 10%, rgba(45,255,178,.05), transparent 60%),
-        radial-gradient(900px 600px at 80% 20%, rgba(255,176,32,.04), transparent 55%),
+        radial-gradient(1200px 700px at 20% 10%, rgba(45,255,178,.06), transparent 60%),
         var(--bg);
-      color: var(--text);
+      color:var(--text);
     }
 
-    .muted{ color: var(--muted2); opacity: 1; }
-    .mono{ color: rgba(217,255,233,.86); }
-
-    .card, .chartCard{
-      background: linear-gradient(180deg, var(--panel), var(--panel2));
-      border: 1px solid var(--stroke);
-      box-shadow: var(--shadow);
-      backdrop-filter: blur(8px);
+    .card,.chartCard{
+      background:linear-gradient(180deg,var(--panel),var(--panel2));
+      border:1px solid var(--border);
+      box-shadow:var(--shadow);
+      backdrop-filter:blur(8px);
     }
 
-    [data-theme="dark"] h1{ text-shadow: var(--glow); }
+    input,button{ border-color:var(--border); }
+    .muted{ color:var(--muted); }
 
-    input, select{
-      border: 1px solid var(--stroke);
-      background: rgba(0,0,0,.08);
-    }
-    [data-theme="dark"] input,
-    [data-theme="dark"] select{
-      background: rgba(0,0,0,.24);
-    }
-
-    [data-theme="dark"] button{
-      background: rgba(0,0,0,.30);
-      border: 1px solid var(--stroke);
-      box-shadow: var(--glow);
+    /* =====================================================
+       HEADER
+       ===================================================== */
+    .header{
+      display:flex;
+      justify-content:space-between;
+      align-items:center;
+      margin-bottom:10px;
     }
 
-    .statusDot{ background: rgba(255,255,255,.35); }
-    .ok{ background: var(--ok); box-shadow: 0 0 14px rgba(45,255,178,.32); }
-    .warn{ background: var(--warn); box-shadow: 0 0 14px rgba(255,176,32,.26); }
-    .bad{ background: var(--bad); box-shadow: 0 0 14px rgba(255,59,92,.26); }
-
-/* ===== Responsive Industrial SCADA ===== */
-.wrap { padding: 0; }
-
-/* ใช้ Grid แทน Flex ให้คุมคอลัมน์ง่าย + ไม่ล้น */
-.row{
-  display: grid !important;
-  grid-template-columns: repeat(12, 1fr);
-  gap: 12px;
-  width: 100%;
-}
-
-/* การ์ดแต่ละใบกินคอลัมน์ */
-.row > .card:nth-child(1){ grid-column: span 4; }  /* device_id */
-.row > .card:nth-child(2){ grid-column: span 5; }  /* controls */
-.row > .card:nth-child(3){ grid-column: span 3; }  /* latest KPI */
-
-@media (max-width: 1100px){
-  .row > .card:nth-child(1){ grid-column: span 6; }
-  .row > .card:nth-child(2){ grid-column: span 6; }
-  .row > .card:nth-child(3){ grid-column: span 12; }
-}
-
-@media (max-width: 720px){
-  .row > .card:nth-child(1),
-  .row > .card:nth-child(2),
-  .row > .card:nth-child(3){
-    grid-column: span 12;
-  }
-
-  body{ padding: 12px; }
-  h1{ font-size: 18px; }
-  .kpi{ font-size: 26px; }
-}
-
-/* จอใหญ่ (ทีวีโรงงาน/จอคอนโทรล) */
-@media (min-width: 1600px){
-  .wrap{ max-width: 1400px; }
-  h1{ font-size: 24px; }
-  label{ font-size: 13px; }
-  .kpi{ font-size: 38px; }
-  canvas{ height: 520px !important; }
-}
-
-/* มือถือเล็กมาก */
-@media (max-width: 420px){
-  .kpi{ font-size: 22px; }
-  button{ width: 100%; }
-  .grid2{ grid-template-columns: 1fr; }
-  canvas{ height: 360px !important; }
-}
-
+    .statusDot{
+      width:10px;
+      height:10px;
+      border-radius:50%;
+      background:#999;
+      display:inline-block;
+      margin-right:6px;
+    }
+    .ok{ background:var(--accent); box-shadow:0 0 12px var(--accent); }
+    .bad{ background:#ff3b5c; box-shadow:0 0 12px #ff3b5c; }
   </style>
 </head>
 
 <body>
-  <div class="wrap">
-    <div class="title">
-      <h1>SCADA Dashboard</h1>
+<div class="wrap">
 
-      <div style="display:flex; gap:10px; align-items:center;">
-        <button id="themeBtn">🌙 Dark</button>
-
-        <div class="muted">
-          <span id="healthDot" class="statusDot"></span>
-          <span id="healthText">checking…</span>
-        </div>
-      </div>
-    </div>
-
-    <div class="row">
-      <div class="card">
-        <label>device_id</label>
-        <input id="deviceId" value="dht22-01" placeholder="เช่น dht22-01" />
-        <div class="muted" style="margin-top:8px">
-          เรียก: <span class="mono">/api/history?device_id=…&minutes=…</span>
-        </div>
-      </div>
-
-      <div class="card">
-        <div class="grid2">
-          <div>
-            <label>ย้อนหลัง (minutes)</label>
-            <input id="minutes" type="number" value="180" min="1" step="1" />
-          </div>
-          <div>
-            <label>รีเฟรชทุก (วินาที)</label>
-            <input id="refreshSec" type="number" value="10" min="2" step="1" />
-          </div>
-        </div>
-
-        <div style="display:flex; gap:10px; margin-top:12px; align-items:center; flex-wrap:wrap;">
-          <button id="btnLoad">โหลด/รีเฟรช</button>
-          <button id="btnToggle">หยุด auto</button>
-          <div class="muted" id="lastUpdate">—</div>
-        </div>
-      </div>
-
-      <div class="card">
-        <div class="muted">ค่าล่าสุด</div>
-        <div class="kpi" id="latestTemp">— <small>°C</small></div>
-        <div class="kpi" id="latestHum">— <small>%</small></div>
-        <div class="muted" id="latestTs">—</div>
-      </div>
-    </div>
-
-    <div style="height:12px"></div>
-
-    <div class="chartCard">
-      <canvas id="chart"></canvas>
-      <div class="muted" id="note" style="margin-top:10px">—</div>
+  <!-- HEADER -->
+  <div class="header">
+    <h1>SCADA Dashboard</h1>
+    <div class="muted">
+      <span id="healthDot" class="statusDot"></span>
+      <span id="healthText">checking…</span>
     </div>
   </div>
 
-  <script>
-    const $ = (id) => document.getElementById(id);
+  <!-- CONTROL ROW -->
+  <div class="row">
+    <div class="card">
+      <label>device_id</label>
+      <input id="deviceId" value="dht22-01">
+    </div>
 
-    let timer = null;
-    let chart = null;
+    <div class="card control">
+      <label>ย้อนหลัง (minutes)</label>
+      <input id="minutes" type="number" value="180">
 
-    function fmtLocal(iso) {
-      if (!iso) return "—";
-      return new Date(iso).toLocaleString();
-    }
+      <label style="margin-top:10px">เลือกช่วงเวลา (From – To)</label>
+      <input id="fromTime" type="datetime-local">
+      <input id="toTime" type="datetime-local" style="margin-top:6px">
 
-    async function checkHealth() {
-      const url = "/health"; // ✅ ตรงกับ server.js
-      try {
-        const res = await fetch(url, { cache: "no-store" });
-        const ok = res.ok;
-        $("healthDot").className = "statusDot " + (ok ? "ok" : "bad");
-        $("healthText").textContent = ok ? "backend ok" : ("backend error (" + res.status + ")");
-      } catch (e) {
-        $("healthDot").className = "statusDot bad";
-        $("healthText").textContent = "backend offline";
+      <div style="display:flex;gap:8px;margin-top:10px;flex-wrap:wrap">
+        <button id="btnLoad">โหลด</button>
+        <button id="btnToggle">หยุด auto</button>
+        <span class="muted" id="lastUpdate">—</span>
+      </div>
+    </div>
+
+    <div class="card kpi">
+      <div class="muted">ค่าล่าสุด</div>
+      <div class="kpiValue" id="latestTemp">— °C</div>
+      <div class="kpiValue" id="latestHum">— %</div>
+      <div class="muted" id="latestTs">—</div>
+    </div>
+  </div>
+
+  <!-- CHART -->
+  <div class="chartCard">
+    <canvas id="chart"></canvas>
+    <div class="muted" id="note">—</div>
+  </div>
+
+</div>
+
+<!-- DATE ADAPTER -->
+<script src="https://cdn.jsdelivr.net/npm/date-fns@3.6.0"></script>
+<script src="https://cdn.jsdelivr.net/npm/chartjs-adapter-date-fns@3.0.0"></script>
+
+<script>
+const $ = id => document.getElementById(id);
+let chart=null, timer=null;
+
+/* ------------------ API ------------------ */
+async function checkHealth(){
+  try{
+    const r=await fetch("/health",{cache:"no-store"});
+    $("healthDot").className="statusDot "+(r.ok?"ok":"bad");
+    $("healthText").textContent=r.ok?"backend ok":"backend error";
+  }catch{
+    $("healthDot").className="statusDot bad";
+    $("healthText").textContent="offline";
+  }
+}
+
+async function loadLatest(device){
+  const r=await fetch(`/api/latest?device_id=${device}`);
+  const x=await r.json();
+  if(!x)return;
+  $("latestTemp").textContent=`${(+x.temp_c).toFixed(2)} °C`;
+  $("latestHum").textContent=`${(+x.hum_pct).toFixed(2)} %`;
+  $("latestTs").textContent=new Date(x.ts).toLocaleString();
+}
+
+async function loadHistory(device,minutes){
+  const r=await fetch(`/api/history?device_id=${device}&minutes=${minutes}`);
+  return await r.json();
+}
+
+async function loadRange(device,from,to){
+  const r=await fetch(`/api/range?device_id=${device}&from=${from}&to=${to}`);
+  return await r.json();
+}
+
+/* ------------------ CHART ------------------ */
+function drawChart(rows){
+  const labels=rows.map(r=>new Date(r.ts));
+  const temp=rows.map(r=>r.temp_c);
+  const hum =rows.map(r=>r.hum_pct);
+
+  if(chart){
+    chart.data.labels=labels;
+    chart.data.datasets[0].data=temp;
+    chart.data.datasets[1].data=hum;
+    chart.update();
+    return;
+  }
+
+  chart=new Chart($("chart"),{
+    type:"line",
+    data:{
+      labels,
+      datasets:[
+        {label:"Temp °C",data:temp,borderColor:"#2dffb2",borderWidth:2,pointRadius:0},
+        {label:"Hum %", data:hum ,borderColor:"#ffb020",borderWidth:2,pointRadius:0}
+      ]
+    },
+    options:{
+      responsive:true,
+      maintainAspectRatio:false,
+      scales:{
+        x:{type:"time"},
+        y:{beginAtZero:false}
       }
     }
+  });
+}
 
-    async function loadLatest(deviceId) {
-      try {
-        const res = await fetch(`/api/latest?device_id=${encodeURIComponent(deviceId)}`, { cache: "no-store" });
-        if (!res.ok) throw new Error("latest status " + res.status);
-        const x = await res.json();
-        if (!x) return;
+/* ------------------ REFRESH ------------------ */
+async function refresh(){
+  const device=$("deviceId").value;
+  const from=$("fromTime").value;
+  const to=$("toTime").value;
 
-        $("latestTemp").innerHTML = `${Number(x.temp_c ?? NaN).toFixed(2)} <small>°C</small>`;
-        $("latestHum").innerHTML  = `${Number(x.hum_pct ?? NaN).toFixed(2)} <small>%</small>`;
-        $("latestTs").textContent = `เวลา: ${fmtLocal(x.ts)} | topic: ${x.topic ?? "-"}`;
-      } catch (e) {
-        $("latestTs").textContent = "โหลด latest ไม่ได้";
-      }
-    }
+  await checkHealth();
+  await loadLatest(device);
 
-    async function loadHistory(deviceId, minutes) {
-      const url = `/api/history?device_id=${encodeURIComponent(deviceId)}&minutes=${encodeURIComponent(minutes)}`;
-      const res = await fetch(url, { cache: "no-store" });
-      if (!res.ok) throw new Error("history status " + res.status);
-      const arr = await res.json();
-      if (!Array.isArray(arr)) throw new Error("history not array");
+  let rows;
+  if(from && to){
+    stopAuto();
+    rows=await loadRange(device,from,to);
+  }else{
+    rows=await loadHistory(device,$("minutes").value);
+  }
 
-      arr.sort((a,b) => new Date(a.ts) - new Date(b.ts));
+  drawChart(rows);
+  $("lastUpdate").textContent=new Date().toLocaleTimeString();
+  $("note").textContent=`ข้อมูล ${rows.length} จุด`;
+}
 
-      const labels = arr.map(r => new Date(r.ts));
-      const temp = arr.map(r => Number(r.temp_c));
-      const hum  = arr.map(r => Number(r.hum_pct));
+function startAuto(){
+  stopAuto();
+  timer=setInterval(refresh,10000);
+  $("btnToggle").textContent="หยุด auto";
+}
+function stopAuto(){
+  if(timer)clearInterval(timer);
+  timer=null;
+  $("btnToggle").textContent="เริ่ม auto";
+}
 
-      return { labels, temp, hum, count: arr.length, firstTs: arr[0]?.ts, lastTs: arr[arr.length - 1]?.ts, url };
-    }
+$("btnLoad").onclick=refresh;
+$("btnToggle").onclick=()=>timer?stopAuto():startAuto();
 
-    function setChartTheme() {
-      if (!chart) return;
-
-      const dark = document.documentElement.getAttribute("data-theme") === "dark";
-      const grid   = dark ? "rgba(45,255,178,.10)" : "rgba(17,24,39,.10)";
-      const tick   = dark ? "rgba(217,255,233,.86)" : "rgba(11,18,32,.75)";
-      const border = dark ? "rgba(45,255,178,.24)" : "rgba(17,24,39,.18)";
-
-      chart.options.scales.x.grid.color = grid;
-      chart.options.scales.yTemp.grid.color = grid;
-      chart.options.scales.yHum.grid.color = grid;
-
-      chart.options.scales.x.ticks.color = tick;
-      chart.options.scales.yTemp.ticks.color = tick;
-      chart.options.scales.yHum.ticks.color = tick;
-
-      chart.options.scales.x.border.color = border;
-      chart.options.scales.yTemp.border.color = border;
-      chart.options.scales.yHum.border.color = border;
-
-      chart.options.plugins.legend.labels.color = tick;
-
-      chart.data.datasets[0].borderColor = dark ? "#2dffb2" : "#2563eb"; // temp
-      chart.data.datasets[1].borderColor = dark ? "#ffb020" : "#f59e0b"; // hum
-
-      chart.update();
-    }
-
-    function ensureChart(labels, temp, hum) {
-      const ctx = $("chart").getContext("2d");
-
-      if (chart) {
-        chart.data.labels = labels;
-        chart.data.datasets[0].data = temp;
-        chart.data.datasets[1].data = hum;
-        setChartTheme();
-        return;
-      }
-
-      chart = new Chart(ctx, {
-        type: "line",
-        data: {
-          labels,
-          datasets: [
-            { label: "Temperature (°C)", data: temp, borderWidth: 2, pointRadius: 0, tension: 0.25, yAxisID: "yTemp", borderColor: "#2dffb2" },
-            { label: "Humidity (%)",     data: hum,  borderWidth: 2, pointRadius: 0, tension: 0.25, yAxisID: "yHum",  borderColor: "#ffb020" }
-          ]
-        },
-        options: {
-          responsive: true,
-          maintainAspectRatio: false,
-          interaction: { mode: "index", intersect: false },
-          plugins: {
-            legend: { position: "top" },
-            tooltip: {
-              callbacks: {
-                title: (items) => {
-                  const d = items?.[0]?.label;
-                  return d ? new Date(d).toLocaleString() : "";
-                }
-              }
-            }
-          },
-          scales: {
-            x: { type: "time", time: { unit: "minute" } },
-            yTemp: { type: "linear", position: "left", title: { display: true, text: "°C" } },
-            yHum:  { type: "linear", position: "right", title: { display: true, text: "%" }, grid: { drawOnChartArea: false } }
-          }
-        }
-      });
-
-      setChartTheme();
-    }
-  </script>
-
-  <!-- Chart.js time scale adapter -->
-  <script src="https://cdn.jsdelivr.net/npm/date-fns@3.6.0"></script>
-  <script src="https://cdn.jsdelivr.net/npm/chartjs-adapter-date-fns@3.0.0"></script>
-
-  <script>
-    // ===== Theme toggle =====
-    const themeBtn = document.getElementById("themeBtn");
-
-    function applyTheme(theme) {
-      document.documentElement.setAttribute("data-theme", theme);
-      themeBtn.textContent = theme === "dark" ? "☀️ Light" : "🌙 Dark";
-      localStorage.setItem("theme", theme);
-      setChartTheme();
-    }
-
-    // default เป็น dark แบบ SCADA
-    const savedTheme = localStorage.getItem("theme") || "dark";
-    applyTheme(savedTheme);
-
-    themeBtn.addEventListener("click", () => {
-      const cur = document.documentElement.getAttribute("data-theme");
-      applyTheme(cur === "dark" ? "light" : "dark");
-    });
-
-    // ===== Data refresh =====
-    async function refreshOnce() {
-      const deviceId = $("deviceId").value.trim();
-      const minutes  = Number($("minutes").value || 60);
-      if (!deviceId) return;
-
-      try {
-        await checkHealth();
-        await loadLatest(deviceId);
-
-        const h = await loadHistory(deviceId, minutes);
-        ensureChart(h.labels, h.temp, h.hum);
-
-        $("lastUpdate").textContent = "อัปเดต: " + new Date().toLocaleTimeString();
-        $("note").textContent =
-          `จุดข้อมูล: ${h.count} | ช่วงเวลา: ${fmtLocal(h.firstTs)} → ${fmtLocal(h.lastTs)} | ${h.url}`;
-      } catch (e) {
-        $("note").textContent = "โหลดกราฟไม่สำเร็จ: " + (e?.message || e);
-      }
-    }
-
-    function startAuto() {
-      stopAuto();
-      const sec = Math.max(2, Number($("refreshSec").value || 10));
-      timer = setInterval(refreshOnce, sec * 1000);
-      $("btnToggle").textContent = "หยุด auto";
-    }
-
-    function stopAuto() {
-      if (timer) clearInterval(timer);
-      timer = null;
-      $("btnToggle").textContent = "เริ่ม auto";
-    }
-
-    $("btnLoad").addEventListener("click", refreshOnce);
-    $("btnToggle").addEventListener("click", () => (timer ? stopAuto() : startAuto()));
-
-    refreshOnce().then(startAuto);
-  </script>
+refresh(); startAuto();
+</script>
 </body>
 </html>
