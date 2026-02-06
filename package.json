@@ -2,10 +2,9 @@
   "name": "scada-mqtt-to-neon",
   "version": "1.0.0",
   "private": true,
-  "type": "module",
-  "main": "server.js",
+  "main": "server.cjs",
   "scripts": {
-    "start": "node server.js"
+    "start": "node server.cjs"
   },
   "dependencies": {
     "dotenv": "^16.4.5",
